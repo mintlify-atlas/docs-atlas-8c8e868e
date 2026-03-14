@@ -1,0 +1,413 @@
+---
+title: 'QoS Configuration'
+description: 'Configure Modular QoS CLI (MQC) with class-map, policy-map, and service-policy'
+icon: 'gauge-high'
+---
+
+# QoS Configuration (MQC)
+
+This guide covers **Tab ⑤ QoS Avanzado — MQC** — implementing Cisco's Modular QoS CLI framework to classify, mark, police, shape, and prioritize traffic.
+
+---
+
+## Overview of MQC (Modular QoS CLI)
+
+Cisco IOS 15.x uses a **3-step QoS model**:
+
+<Steps>
+  <Step title="class-map — Classify Traffic">
+    Identify traffic flows by **DSCP**, **IP address**, **ACL**, or **protocol**.
+  </Step>
+
+  <Step title="policy-map — Define Actions">
+    Specify what to do with each traffic class:
+    - **priority:** Low-latency queue (voice/video)
+    - **bandwidth:** Minimum guaranteed bandwidth
+    - **police:** Rate-limit (drop excess)
+    - **shape:** Smooth bursts (buffer + delay)
+    - **set dscp:** Remark DSCP value
+  </Step>
+
+  <Step title="service-policy — Apply to Interface">
+    Bind the policy to a physical interface in `input`, `output`, or `both` directions.
+  </Step>
+</Steps>
+
+<Warning>
+**Uplink Protection:** The uplink interface `GigabitEthernet0/0` is protected and **cannot** have a service-policy applied. Use access ports (e.g., `Gi0/1`, `Gi0/2`) for QoS.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_qos.py:243-247`
+</Warning>
+
+---
+
+## DSCP Presets
+
+The application provides **quick-access DSCP buttons** for common traffic classes:
+
+| Button Label                          | IOS Value | Use Case                            |
+|---------------------------------------|-----------|-------------------------------------|
+| **EF — Voz/Video (46)**               | `ef`      | Voice/video (ultra-low latency)     |
+| **AF41 — Video conferencia (34)**     | `af41`    | High-quality video conferencing     |
+| **AF31 — Llamadas (26)**              | `af31`    | Mission-critical voice              |
+| **AF21 — Datos críticos (18)**        | `af21`    | Critical business data              |
+| **AF11 — Datos normales (10)**        | `af11`    | Normal priority data                |
+| **CS3 — Señalización (24)**           | `cs3`     | Call signaling (SIP, H.323)         |
+| **CS1 — Scavenger (8)**               | `cs1`     | Low-priority bulk traffic           |
+| **Default — Best effort (0)**         | `default` | Unclassified traffic                |
+
+**Reference:** `/home/daytona/workspace/source/constants.py:22-31`
+
+Click any button to **pre-fill** the DSCP value in the class-map form.
+
+---
+
+## Step 1: class-map — Classify Traffic
+
+### Creating a class-map
+
+<Steps>
+  <Step title="Enter class name">
+    Choose a descriptive name (e.g., `VOICE_CLASS`, `VIDEO_CLASS`, `BULK_TRAFFIC`).
+  </Step>
+
+  <Step title="Select match type">
+    - **match-any:** Traffic matches **any** criterion (OR logic)
+    - **match-all:** Traffic must match **all** criteria (AND logic)
+  </Step>
+
+  <Step title="Choose criteria and value">
+    | Criteria              | Value Example       | Description                           |
+    |-----------------------|---------------------|---------------------------------------|
+    | `dscp`                | `ef`                | Match DSCP value directly             |
+    | `ip dscp`             | `af41`              | Match IP DSCP field                   |
+    | `ip precedence`       | `5`                 | Match legacy IP Precedence (0-7)      |
+    | `access-group name`   | `ACL_HTTP`          | Match traffic via named ACL           |
+    | `protocol`            | `http`              | Match by protocol name                |
+  </Step>
+
+  <Step title="Click 'Agregar clase'">
+    The class-map is added to the list.
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+**Example 1: Voice Traffic (EF)**
+```cisco
+class-map match-any VOICE_CLASS
+ match dscp ef
+ exit
+```
+
+**Example 2: Video Traffic (AF41)**
+```cisco
+class-map match-any VIDEO_CLASS
+ match dscp af41
+ exit
+```
+
+**Example 3: HTTP Traffic via ACL**
+```cisco
+class-map match-all HTTP_CLASS
+ match access-group name ACL_HTTP
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:224-231`
+
+---
+
+## Step 2: policy-map — Define Actions
+
+### Creating a policy-map
+
+<Steps>
+  <Step title="Enter policy name">
+    Use a descriptive name (e.g., `POLITICA_QOS`, `WAN_POLICY`).
+  </Step>
+
+  <Step title="Select a class">
+    Choose a class-map from the dropdown. Click **↻ refresh** if you just added new classes.
+  </Step>
+
+  <Step title="Choose an action and value">
+    | Action             | Value Format      | Description                                      |
+    |--------------------|-------------------|--------------------------------------------------|
+    | `priority`         | `1000000` (bps)   | Low-latency queue (strict priority)              |
+    | `bandwidth`        | `2000000` (bps)   | Minimum guaranteed bandwidth                     |
+    | `police rate`      | `5000000` (bps)   | Rate-limit (drop or mark down excess)            |
+    | `shape average`    | `10000000` (bps)  | Traffic shaping (smooth bursts via buffering)    |
+    | `set dscp`         | `af31`            | Remark DSCP value (for downstream classification)|
+  </Step>
+
+  <Step title="Click 'Agregar clase→acción'">
+    The class-action pair is added to the policy-map entry list.
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+**Example Policy: POLITICA_QOS**
+
+```cisco
+policy-map POLITICA_QOS
+ class VOICE_CLASS
+  priority 1000000
+  exit
+ class VIDEO_CLASS
+  bandwidth 2000000
+  exit
+ class BULK_TRAFFIC
+  police rate 500000 bps
+  exit
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:233-249`
+
+### Action Explanations
+
+#### `priority <bps>`
+Creates a **strict priority queue** (low-latency queue, LLQ). Traffic in this class is always sent first.
+
+**Use Case:** Voice and video that cannot tolerate delay.
+
+<Warning>
+Do not allocate more than **33% of link bandwidth** to priority queues, or other traffic will starve.
+</Warning>
+
+#### `bandwidth <bps>`
+Guarantees a **minimum bandwidth** for this class during congestion. Unused bandwidth is shared with other classes.
+
+**Use Case:** Mission-critical data that needs guaranteed throughput.
+
+#### `police rate <bps> bps`
+Enforces a **rate limit**. Traffic exceeding the rate is:
+- **Dropped** (default)
+- **Marked down** (if `police rate <bps> conform-action transmit exceed-action set-dscp-transmit cs1`)
+
+**Use Case:** Limit bandwidth-hungry applications (file sharing, backups).
+
+#### `shape average <bps>`
+Buffers excess traffic and sends it at a controlled rate. Introduces **slight delay** but prevents drops.
+
+**Use Case:** Smooth bursty traffic over slow WAN links.
+
+#### `set dscp <value>`
+**Remarks** (rewrites) the DSCP field in the IP header.
+
+**Use Case:** Mark traffic for downstream QoS devices (routers, firewalls).
+
+---
+
+## Step 3: service-policy — Apply to Interface
+
+### Binding a Policy to an Interface
+
+<Steps>
+  <Step title="Enter interface name">
+    Specify the access port (e.g., `GigabitEthernet0/1`, `GigabitEthernet0/2`).
+
+    <Warning>
+    **Do NOT use `GigabitEthernet0/0`** (uplink). The app rejects this with an error.
+    </Warning>
+  </Step>
+
+  <Step title="Select direction">
+    - **input:** Classify/police inbound traffic (from end device)
+    - **output:** Shape/prioritize outbound traffic (toward end device)
+    - **both:** Apply in both directions (creates two service-policy statements)
+  </Step>
+
+  <Step title="Click 'Agregar aplicación'">
+    The service-policy is added to the list. If direction is `both`, two entries are created.
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+**Example: Apply to Gi0/1 output**
+```cisco
+interface GigabitEthernet0/1
+ service-policy output POLITICA_QOS
+ exit
+```
+
+**Example: Apply to Gi0/2 in both directions**
+```cisco
+interface GigabitEthernet0/2
+ service-policy input POLITICA_QOS
+ exit
+
+interface GigabitEthernet0/2
+ service-policy output POLITICA_QOS
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:251-259`
+
+---
+
+## Complete QoS Example
+
+Scenario: **Prioritize voice, guarantee video, limit bulk traffic**
+
+### Configuration Steps
+
+<Steps>
+  <Step title="Create class-maps">
+    1. `VOICE_CLASS` → match dscp `ef`
+    2. `VIDEO_CLASS` → match dscp `af41`
+    3. `BULK_CLASS` → match dscp `cs1`
+  </Step>
+
+  <Step title="Create policy-map POLITICA_QOS">
+    1. `VOICE_CLASS` → priority `1000000` (1 Mbps LLQ)
+    2. `VIDEO_CLASS` → bandwidth `2000000` (2 Mbps guaranteed)
+    3. `BULK_CLASS` → police rate `500000` (500 Kbps limit)
+  </Step>
+
+  <Step title="Apply service-policy">
+    Interface: `GigabitEthernet0/1`  
+    Direction: `output`
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+! Class-maps
+class-map match-any VOICE_CLASS
+ match dscp ef
+ exit
+
+class-map match-any VIDEO_CLASS
+ match dscp af41
+ exit
+
+class-map match-any BULK_CLASS
+ match dscp cs1
+ exit
+
+! Policy-map
+policy-map POLITICA_QOS
+ class VOICE_CLASS
+  priority 1000000
+  exit
+ class VIDEO_CLASS
+  bandwidth 2000000
+  exit
+ class BULK_CLASS
+  police rate 500000 bps
+  exit
+ exit
+
+! Service-policy
+interface GigabitEthernet0/1
+ service-policy output POLITICA_QOS
+ exit
+```
+
+### Verification Commands
+
+```cisco
+! Show QoS configuration
+show policy-map
+show policy-map POLITICA_QOS
+
+! Show QoS statistics on interface
+show policy-map interface GigabitEthernet0/1
+
+! Verify class-maps
+show class-map
+show class-map VOICE_CLASS
+```
+
+---
+
+## Cleanup Behavior
+
+When you click **"Limpiar configuración"** (Tab ⑥), the app removes:
+
+1. All `service-policy` bindings
+2. All `policy-map` definitions
+3. All `class-map` definitions
+
+**Cleanup Order (Important):**
+```python
+# Must remove service-policies first, then policy-maps, then class-maps
+# command_builder.py:327-337
+
+# 1. Remove service-policy from interfaces
+for iface, body in re.findall(r'^interface (\S+)\n((?:[ \t].+\n)*)', raw, re.MULTILINE):
+    if 'service-policy' in body:
+        for d, pm in re.findall(r'service-policy (\S+) (\S+)', body):
+            cleanup += [f"interface {iface}", f"no service-policy {d} {pm}", "exit"]
+
+# 2. Remove policy-maps
+for pm in re.findall(r'^policy-map (\S+)', raw, re.MULTILINE):
+    cleanup.append(f"no policy-map {pm}")
+
+# 3. Remove class-maps
+for cm in re.findall(r'^class-map \S+ (\S+)', raw, re.MULTILINE):
+    cleanup.append(f"no class-map {cm}")
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:327-337`
+
+---
+
+## DSCP Reference Table
+
+### Common DSCP Values
+
+| DSCP Name | Decimal | Binary    | Traffic Type              |
+|-----------|---------|-----------|---------------------------|
+| EF        | 46      | 101110    | Voice                     |
+| AF41      | 34      | 100010    | Video conferencing        |
+| AF31      | 26      | 011010    | Mission-critical voice    |
+| AF21      | 18      | 010010    | High-priority data        |
+| AF11      | 10      | 001010    | Normal data               |
+| CS3       | 24      | 011000    | Call signaling            |
+| CS1       | 8       | 001000    | Scavenger/bulk            |
+| Default   | 0       | 000000    | Best effort               |
+
+### AF (Assured Forwarding) Classes
+
+AF uses the format `AFxy`:
+- **x** (class): 1-4 (higher = better)
+- **y** (drop precedence): 1-3 (higher = more likely to drop)
+
+**Example:** `AF31` = Class 3, Drop Precedence 1 (better than AF32 or AF33)
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Define traffic classes">
+    Create class-maps for each traffic type (voice, video, data, etc.).
+  </Step>
+
+  <Step title="Build a policy-map">
+    Assign actions to each class (priority, bandwidth, police, shape, set dscp).
+  </Step>
+
+  <Step title="Apply to interfaces">
+    Use service-policy to bind the policy to access ports (not the uplink).
+  </Step>
+
+  <Step title="Deploy and verify">
+    Send config to switches and verify with `show policy-map interface`.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tab_qos.py`
+- QoS Commands: `/home/daytona/workspace/source/core/command_builder.py:224-259`
+- DSCP Presets: `/home/daytona/workspace/source/constants.py:22-31`
+- Cleanup Logic: `/home/daytona/workspace/source/core/command_builder.py:327-337`

@@ -1,0 +1,695 @@
+---
+title: 'GRE over IPsec Tunnels'
+description: 'Configure encrypted GRE tunnels with IKEv1 and IPsec for secure site-to-site VPNs'
+icon: 'tunnel'
+---
+
+# GRE over IPsec Tunnels
+
+This guide covers **Tab ⑨ GRE over IPsec** — configuring secure site-to-site VPN tunnels between branch switches using GRE encapsulation with IPsec encryption.
+
+---
+
+## Overview
+
+GRE over IPsec combines:
+
+1. **GRE (Generic Routing Encapsulation):** Tunnel protocol that encapsulates multicast/broadcast traffic
+2. **IPsec (Internet Protocol Security):** Encryption and authentication framework
+
+**Architecture:**
+```
+Physical Layer:  SW-A [Gi0/X] ←─ IPsec-encrypted GRE ─→ [Gi0/X] SW-B
+Logical Layer:   Tunnel0 (10.100.0.1) ←─────────────────→ Tunnel0 (10.100.0.2)
+```
+
+---
+
+## Why GRE + IPsec Instead of IPsec Alone?
+
+### The Problem with IPsec-Only VPNs
+
+IPsec in **tunnel mode** or **transport mode** has a critical limitation:
+
+<Warning>
+**IPsec cannot transport multicast or broadcast traffic.**
+
+Dynamic routing protocols like **OSPF** and **EIGRP** rely on multicast:
+- OSPF uses multicast address `224.0.0.5` for neighbor discovery
+- EIGRP uses multicast address `224.0.0.10`
+
+Without multicast support, these protocols **cannot function** over IPsec-only tunnels.
+</Warning>
+
+### The GRE Solution
+
+GRE creates a **point-to-point tunnel** that:
+- Encapsulates all traffic (unicast, multicast, broadcast) into unicast IP packets
+- Supports routing protocols like OSPF, EIGRP, and RIP
+- Allows IP multicast, IPv6, and non-IP protocols
+
+**Then IPsec encrypts the entire GRE tunnel**, providing:
+- Confidentiality (AES-256 encryption)
+- Integrity (SHA-1 HMAC)
+- Authentication (IKEv1 with pre-shared keys)
+
+**Reference:** `/home/daytona/workspace/source/README.md:99-100` and `/home/daytona/workspace/source/ui/tab_security_gre.py:402-405`
+
+---
+
+## GRE over IPsec Configuration Flow
+
+The configuration has **7 steps**, executed in this order:
+
+<Steps>
+  <Step title="IKEv1 Phase 1: ISAKMP Policy">
+    Negotiate encryption, authentication, and Diffie-Hellman group for the IKE security association.
+  </Step>
+
+  <Step title="IKEv1 Phase 1: Pre-Shared Key">
+    Define the shared secret (PSK) for authenticating the remote peer.
+  </Step>
+
+  <Step title="IPsec Phase 2: ACL for GRE Traffic">
+    Specify which traffic should be encrypted (GRE protocol 47 between tunnel endpoints).
+  </Step>
+
+  <Step title="IPsec Phase 2: Transform-Set">
+    Define encryption and integrity algorithms for the IPsec security association.
+  </Step>
+
+  <Step title="Crypto Map">
+    Bind the ACL, transform-set, and peer address together.
+  </Step>
+
+  <Step title="Bind Crypto Map to Physical Interface">
+    Apply the crypto map to the WAN interface where encrypted traffic exits.
+  </Step>
+
+  <Step title="GRE Tunnel Interface">
+    Create the logical tunnel interface with source, destination, and IP address.
+  </Step>
+</Steps>
+
+---
+
+## Step 1: GRE Tunnel Parameters
+
+### Configuring the Tunnel
+
+<Steps>
+  <Step title="Enter tunnel parameters">
+    - **Túnel ID:** Tunnel interface number (e.g., `0` for `Tunnel0`)
+    - **IP origen local (src):** Physical interface IP of the local switch (e.g., `192.168.1.1`)
+    - **IP destino peer (dst):** Public IP of the remote switch (e.g., `200.0.0.2`)
+    - **IP del túnel (local):** Private IP for the local end of the tunnel (e.g., `10.100.0.1`)
+    - **Máscara del túnel:** Subnet mask (typically `255.255.255.252` for /30 point-to-point)
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+interface Tunnel0
+ ip address 10.100.0.1 255.255.255.252
+ tunnel source 192.168.1.1
+ tunnel destination 200.0.0.2
+ tunnel mode gre ip
+ no shutdown
+ exit
+```
+
+**Explanation:**
+- `tunnel source 192.168.1.1`: Local switch's WAN IP (outer IP header)
+- `tunnel destination 200.0.0.2`: Remote switch's WAN IP (outer IP header)
+- `ip address 10.100.0.1 255.255.255.252`: Inner IP address for routing protocols
+- `tunnel mode gre ip`: GRE over IPv4 (default mode)
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:178-195` and `/home/daytona/workspace/source/ui/tab_security_gre.py:493-507`
+
+---
+
+## Step 2: IKEv1 Phase 1 (ISAKMP)
+
+### What is IKEv1 Phase 1?
+
+**IKE (Internet Key Exchange)** is the protocol that negotiates and establishes IPsec security associations (SAs).
+
+**Phase 1** creates a secure **ISAKMP SA** (management channel) used to negotiate Phase 2 (the actual data encryption).
+
+### Configuring ISAKMP
+
+<Steps>
+  <Step title="Enter pre-shared key (PSK)">
+    The same PSK must be configured on **both tunnel endpoints**.
+
+    Example: `MySecretKey123!`
+  </Step>
+
+  <Step title="Enter peer IP address">
+    The remote switch's public IP (same as `tunnel destination`).
+
+    Example: `200.0.0.2`
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+crypto isakmp policy 10
+ encr aes 256
+ hash sha
+ authentication pre-share
+ group 2
+ lifetime 86400
+ exit
+
+crypto isakmp key MySecretKey123! address 200.0.0.2
+```
+
+**Parameter Breakdown:**
+
+| Parameter            | Value           | Description                                      |
+|----------------------|-----------------|--------------------------------------------------|
+| `encr aes 256`       | AES-256-CBC     | Encryption algorithm (256-bit key)               |
+| `hash sha`           | SHA-1           | Integrity/hashing algorithm                      |
+| `authentication`     | `pre-share`     | Use pre-shared key (PSK) instead of PKI          |
+| `group 2`            | DH Group 2      | Diffie-Hellman 1024-bit (max for IOSvL2 15.2)   |
+| `lifetime 86400`     | 24 hours        | SA renegotiation interval                        |
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:196-221` and `/home/daytona/workspace/source/ui/tab_security_gre.py:438-453`
+
+<Note>
+**IOSvL2 15.2 Limitation:** This firmware supports a **maximum of DH Group 2** (1024 bits). Production equipment should use Group 14+ (2048 bits or higher).
+</Note>
+
+### Fixed ISAKMP Policy
+
+The application uses a **hardcoded** IKE Phase 1 proposal optimized for IOSvL2 15.2 compatibility:
+
+```python
+# ui/tab_security_gre.py:220-221
+make_label(frm_ike,
+    "Propuesta fija: encr aes 256 | hash sha | auth pre-share | group 2 | lifetime 86400",
+    fg=TEXT2).pack(anchor="w", pady=(0, 4))
+```
+
+If you need different algorithms (e.g., SHA-256, DH Group 5), modify the command generator at:
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:441-447`
+
+---
+
+## Step 3: IPsec Phase 2 (Transform-Set + Crypto Map)
+
+### What is IPsec Phase 2?
+
+Phase 2 establishes the **IPsec SA** that encrypts the actual data traffic (GRE packets).
+
+### ACL for GRE Traffic
+
+IPsec needs an ACL to define **which traffic to encrypt**. For GRE tunnels, we encrypt protocol 47 (GRE) between the two tunnel endpoints:
+
+```cisco
+ip access-list extended ACL_GRE_0
+ permit gre host 192.168.1.1 host 200.0.0.2
+ exit
+```
+
+**Explanation:**
+- `permit gre`: Match GRE protocol (IP protocol number 47)
+- `host 192.168.1.1`: Local switch's WAN IP (tunnel source)
+- `host 200.0.0.2`: Remote switch's WAN IP (tunnel destination)
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:455-462`
+
+### Transform-Set
+
+Defines the **encryption and integrity algorithms** for Phase 2:
+
+```cisco
+crypto ipsec transform-set TS_GRE_0 esp-aes 256 esp-sha-hmac
+ mode transport
+ exit
+```
+
+**Parameter Breakdown:**
+
+| Parameter          | Value                | Description                              |
+|--------------------|----------------------|------------------------------------------|
+| `esp-aes 256`      | AES-256-CBC          | Data encryption (ESP protocol)           |
+| `esp-sha-hmac`     | SHA-1 HMAC           | Data integrity/authentication            |
+| `mode transport`   | Transport mode       | Encrypt payload only (not outer IP)      |
+
+**Why Transport Mode?**
+
+Transport mode encrypts only the **GRE payload**, leaving the outer IP header intact. This is more efficient than tunnel mode (which would add a second IP header).
+
+**Packet Structure:**
+```
+[Outer IP Header: 192.168.1.1 → 200.0.0.2]
+  [ESP Header]
+    [GRE Header]
+      [Inner IP Header: 10.100.0.1 → 10.100.0.2]
+        [Payload: OSPF, ICMP, etc.]
+    [/GRE]
+  [ESP Trailer + Auth]
+[/ESP]
+```
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:464-472` and `/home/daytona/workspace/source/README.md:99-100`
+
+### Crypto Map
+
+Binds everything together:
+
+```cisco
+crypto map CMAP_GRE 10 ipsec-isakmp
+ set peer 200.0.0.2
+ set transform-set TS_GRE_0
+ match address ACL_GRE_0
+ exit
+```
+
+**Parameters:**
+- **Name:** `CMAP_GRE` (configurable)
+- **Sequence:** `10` (priority; lower = higher priority)
+- **Peer:** Remote switch's public IP
+- **Transform-set:** References `TS_GRE_0` defined above
+- **Match address:** References `ACL_GRE_0` (the GRE traffic ACL)
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:474-482` and `/home/daytona/workspace/source/ui/tab_security_gre.py:228-247`
+
+---
+
+## Step 4: Bind Crypto Map to Physical Interface
+
+### Applying the Crypto Map
+
+The crypto map must be applied to the **physical interface** where encrypted traffic exits the switch (the WAN interface).
+
+<Steps>
+  <Step title="Enter bind interface">
+    Specify the physical interface (e.g., `GigabitEthernet0/1`).
+
+    <Warning>
+    **Do NOT use `GigabitEthernet0/0`** if it's the management/uplink interface. Apply crypto maps to WAN-facing interfaces only.
+    </Warning>
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+interface GigabitEthernet0/1
+ crypto map CMAP_GRE
+ exit
+```
+
+**What Happens:**
+- All outbound traffic on `Gi0/1` is checked against the crypto map
+- If traffic matches `ACL_GRE_0` (GRE to peer), it's encrypted with IPsec
+- All other traffic passes through unencrypted
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:484-491`
+
+---
+
+## Complete GRE over IPsec Example
+
+### Scenario: Connect SW-A to SW-B
+
+**SW-A (Local):**
+- WAN IP: `192.168.1.1`
+- Tunnel IP: `10.100.0.1/30`
+
+**SW-B (Remote):**
+- WAN IP: `200.0.0.2`
+- Tunnel IP: `10.100.0.2/30`
+
+**Pre-Shared Key:** `SecureTunnelKey456!`
+
+### Configuration Steps
+
+<Steps>
+  <Step title="Enter GRE tunnel parameters">
+    - Tunnel ID: `0`
+    - Source: `192.168.1.1`
+    - Destination: `200.0.0.2`
+    - Tunnel IP: `10.100.0.1`
+    - Mask: `255.255.255.252`
+  </Step>
+
+  <Step title="Enter IKEv1 parameters">
+    - PSK: `SecureTunnelKey456!`
+    - Peer: `200.0.0.2`
+  </Step>
+
+  <Step title="Enter crypto map parameters">
+    - Map name: `CMAP_GRE`
+    - Sequence: `10`
+    - Bind interface: `GigabitEthernet0/1`
+  </Step>
+
+  <Step title="Click 'Agregar túnel GRE'">
+    The tunnel is added to the list.
+  </Step>
+</Steps>
+
+### Generated IOS Commands (SW-A)
+
+```cisco
+! IKEv1 Phase 1: ISAKMP Policy
+crypto isakmp policy 10
+ encr aes 256
+ hash sha
+ authentication pre-share
+ group 2
+ lifetime 86400
+ exit
+
+! IKEv1 Phase 1: Pre-Shared Key
+crypto isakmp key SecureTunnelKey456! address 200.0.0.2
+
+! ACL for GRE Traffic (IPsec interesting traffic)
+ip access-list extended ACL_GRE_0
+ permit gre host 192.168.1.1 host 200.0.0.2
+ exit
+
+! IPsec Phase 2: Transform-Set
+crypto ipsec transform-set TS_GRE_0 esp-aes 256 esp-sha-hmac
+ mode transport
+ exit
+
+! Crypto Map (bind ACL + transform-set + peer)
+crypto map CMAP_GRE 10 ipsec-isakmp
+ set peer 200.0.0.2
+ set transform-set TS_GRE_0
+ match address ACL_GRE_0
+ exit
+
+! Apply Crypto Map to Physical Interface
+interface GigabitEthernet0/1
+ crypto map CMAP_GRE
+ exit
+
+! GRE Tunnel Interface
+interface Tunnel0
+ ip address 10.100.0.1 255.255.255.252
+ tunnel source 192.168.1.1
+ tunnel destination 200.0.0.2
+ tunnel mode gre ip
+ no shutdown
+ exit
+```
+
+### Mirror Configuration on SW-B
+
+**Key Changes:**
+- `tunnel source 200.0.0.2` (SW-B's WAN IP)
+- `tunnel destination 192.168.1.1` (SW-A's WAN IP)
+- `ip address 10.100.0.2 255.255.255.252` (opposite end of /30 subnet)
+- `crypto isakmp key SecureTunnelKey456! address 192.168.1.1` (peer = SW-A)
+- `permit gre host 200.0.0.2 host 192.168.1.1` (ACL source/dest reversed)
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:389-508`
+
+---
+
+## Verification Commands
+
+### Check IKE Phase 1 Status
+
+```cisco
+show crypto isakmp sa
+```
+
+**Expected Output:**
+```
+IPv4 Crypto ISAKMP SA
+dst             src             state          conn-id status
+200.0.0.2       192.168.1.1     QM_IDLE           1001 ACTIVE
+```
+
+**States:**
+- `QM_IDLE`: Phase 1 established, ready for Phase 2
+- `MM_NO_STATE` or missing: Phase 1 failed (check PSK, peer reachability)
+
+### Check IPsec Phase 2 Status
+
+```cisco
+show crypto ipsec sa
+```
+
+**Expected Output:**
+```
+interface: GigabitEthernet0/1
+    Crypto map tag: CMAP_GRE, local addr 192.168.1.1
+
+   protected vrf: (none)
+   local  ident (addr/mask/prot/port): (192.168.1.1/255.255.255.255/47/0)
+   remote ident (addr/mask/prot/port): (200.0.0.2/255.255.255.255/47/0)
+   current_peer 200.0.0.2 port 500
+     PERMIT, flags={origin_is_acl,}
+    #pkts encaps: 42, #pkts encrypt: 42, #pkts digest: 42
+    #pkts decaps: 38, #pkts decrypt: 38, #pkts verify: 38
+```
+
+**Key Indicators:**
+- `#pkts encaps/decrypt > 0`: Tunnel is passing traffic
+- `#pkts encaps = 0`: Check ACL match, routing, or firewall rules
+
+### Test Tunnel Connectivity
+
+```cisco
+ping 10.100.0.2 source Tunnel0
+```
+
+**Success:**
+```
+Type escape sequence to abort.
+Sending 5, 100-byte ICMP Echos to 10.100.0.2, timeout is 2 seconds:
+Packet sent with a source address of 10.100.0.1
+!!!!!
+Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/5 ms
+```
+
+### Check Tunnel Interface Status
+
+```cisco
+show interface Tunnel0
+```
+
+**Expected Output:**
+```
+Tunnel0 is up, line protocol is up
+  Hardware is Tunnel
+  Internet address is 10.100.0.1/30
+  MTU 1476 bytes, BW 100 Kbit/sec
+  Tunnel source 192.168.1.1, destination 200.0.0.2
+  Tunnel protocol/transport GRE/IP
+```
+
+---
+
+## OSPF over GRE Tunnel
+
+Once the tunnel is established, you can run OSPF over it:
+
+```cisco
+router ospf 1
+ network 10.100.0.0 0.0.0.3 area 0
+ exit
+```
+
+**Benefits:**
+- Dynamic routing between sites
+- Automatic failover if primary path fails
+- Load balancing over multiple tunnels
+
+**Verification:**
+```cisco
+show ip ospf neighbor
+```
+
+**Expected Output:**
+```
+Neighbor ID     Pri   State           Dead Time   Address         Interface
+200.0.0.2         0   FULL/  -        00:00:34    10.100.0.2      Tunnel0
+```
+
+---
+
+## Troubleshooting
+
+### Tunnel Interface is Down
+
+**Symptoms:**
+```
+Tunnel0 is up, line protocol is down
+```
+
+**Causes:**
+1. **Tunnel destination unreachable:** Check routing to peer IP
+   ```cisco
+   show ip route 200.0.0.2
+   ping 200.0.0.2
+   ```
+
+2. **Crypto map not applied:** Verify crypto map on physical interface
+   ```cisco
+   show crypto map
+   ```
+
+3. **Peer not configured:** Remote side must have matching tunnel config
+
+### No IKE SA Established
+
+**Symptoms:**
+```
+show crypto isakmp sa
+% No entries found.
+```
+
+**Causes:**
+1. **PSK mismatch:** Keys must be identical on both sides
+2. **Peer IP unreachable:** Verify WAN connectivity
+   ```cisco
+   ping 200.0.0.2
+   ```
+3. **Firewall blocking UDP 500/4500:** IKE uses UDP port 500
+
+**Debug:**
+```cisco
+debug crypto isakmp
+```
+
+### IPsec SA Not Established
+
+**Symptoms:**
+```
+show crypto ipsec sa
+#pkts encaps: 0, #pkts encrypt: 0
+```
+
+**Causes:**
+1. **ACL not matching:** Check ACL permits GRE between correct IPs
+   ```cisco
+   show access-list ACL_GRE_0
+   ```
+2. **Transform-set mismatch:** Both sides must use same encryption/hash
+3. **No interesting traffic:** Send ping through tunnel to trigger SA
+   ```cisco
+   ping 10.100.0.2 source Tunnel0
+   ```
+
+### Traffic Not Encrypted
+
+**Symptoms:**
+- Ping works but `show crypto ipsec sa` shows 0 packets
+
+**Cause:**
+- Crypto map not applied to correct interface
+
+**Fix:**
+```cisco
+interface GigabitEthernet0/1
+ crypto map CMAP_GRE
+```
+
+---
+
+## Preview Commands Before Deployment
+
+Click **"Ver comandos IOS"** (Preview Commands) to see the full configuration without deploying:
+
+```python
+# ui/tab_security_gre.py:315-321
+def _preview_gre_commands(app):
+    cmds = build_gre_ipsec_commands(app.gre_tunnels)
+    if cmds:
+        messagebox.showinfo("Comandos GRE over IPsec", "\n".join(cmds))
+    else:
+        messagebox.showinfo("Sin túneles", "No hay túneles GRE configurados.")
+```
+
+This displays the output in a popup dialog.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:315-321`
+
+---
+
+## Security Considerations
+
+<Warning>
+**Production Deployment Recommendations**
+
+1. **Use Strong Pre-Shared Keys**
+   - Minimum 20 characters
+   - Mixed case, numbers, symbols
+   - Never reuse keys across tunnels
+
+2. **Upgrade to DH Group 14+ in Production**
+   - IOSvL2 15.2 maxes out at Group 2 (1024-bit)
+   - Production IOS supports Group 14 (2048-bit), Group 19 (256-bit ECC)
+
+3. **Consider IKEv2 Instead of IKEv1**
+   - IKEv2 has better performance and security
+   - Check firmware support before deploying
+
+4. **Use SHA-256 or SHA-384 for Integrity**
+   - SHA-1 is deprecated (collision attacks)
+   - Firmware permitting, use `hash sha256` in ISAKMP policy
+
+5. **Implement Dead Peer Detection (DPD)**
+   ```cisco
+   crypto isakmp keepalive 10 3
+   ```
+   - Detects dead tunnels faster (10-second keepalive, 3 retries)
+
+6. **Restrict Crypto Map with More Specific ACLs**
+   - Current ACL: `permit gre host A host B` (encrypts all GRE)
+   - Production: Add source/dest subnet filters if needed
+</Warning>
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Plan tunnel endpoints">
+    Identify WAN IPs, tunnel IPs, and pre-shared key.
+  </Step>
+
+  <Step title="Configure GRE tunnel parameters">
+    Enter source, destination, tunnel IP, and mask.
+  </Step>
+
+  <Step title="Configure IKEv1 parameters">
+    Enter PSK and peer IP address.
+  </Step>
+
+  <Step title="Configure crypto map">
+    Enter map name, sequence, and bind interface.
+  </Step>
+
+  <Step title="Click 'Agregar túnel GRE'">
+    The tunnel config is added to the list.
+  </Step>
+
+  <Step title="Deploy to both endpoints">
+    Apply config to SW-A and SW-B (with mirrored parameters).
+  </Step>
+
+  <Step title="Verify tunnel status">
+    Use `show crypto isakmp sa`, `show crypto ipsec sa`, and `ping`.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tab_security_gre.py:145-321`
+- Command Generator: `/home/daytona/workspace/source/ui/tab_security_gre.py:389-508`
+- README GRE/IPsec Features: `/home/daytona/workspace/source/README.md:93-100`

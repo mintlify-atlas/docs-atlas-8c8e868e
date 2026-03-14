@@ -1,0 +1,319 @@
+---
+title: 'Widget Factory Functions'
+description: 'Reusable Tkinter widget creators with consistent styling'
+---
+
+## Overview
+
+The `ui/widgets.py` module provides factory functions for creating styled Tkinter widgets with consistent colors, fonts, and borders across the entire application.
+
+**Key benefit:** Centralized styling — change the appearance of all buttons or entries by editing a single function.
+
+Defined in: `source/ui/widgets.py`
+
+## Global Styling
+
+### `apply_style(root)`
+
+Configures the global ttk theme for the application. Must be called once during initialization.
+
+<ParamField path="root" type="tk.Tk" required>
+  The Tkinter root window instance
+</ParamField>
+
+**Configures:**
+- `TNotebook` — Tab container styling
+- `TNotebook.Tab` — Individual tab appearance (selected/unselected states)
+- `TFrame`, `TLabelframe` — Container backgrounds and borders
+- `TCombobox` — Dropdown menus
+- `TCheckbutton` — Checkboxes
+- `TScrollbar` — Scrollbar appearance
+
+**Theme:** Uses the "clam" ttk theme for maximum cross-platform customization.
+
+Source: `widgets.py:20-55`
+
+## Widget Factory Functions
+
+### `make_frame(parent)`
+
+Creates a simple frame with the panel background color (`BG2`).
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget to contain this frame
+</ParamField>
+
+**Returns:** `tk.Frame`
+
+Source: `widgets.py:59-61`
+
+---
+
+### `make_label(parent, text, fg=TEXT2, font=("Consolas", 9), **kw)`
+
+Creates a styled label with customizable foreground color and font.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="text" type="str" required>
+  Label text content
+</ParamField>
+
+<ParamField path="fg" type="str" default="TEXT2">
+  Foreground (text) color. Can be overridden for status indicators.
+</ParamField>
+
+<ParamField path="font" type="tuple" default='("Consolas", 9)'>
+  Font specification: (family, size, style)
+</ParamField>
+
+<ParamField path="**kw" type="dict">
+  Additional keyword arguments passed to `tk.Label`
+</ParamField>
+
+**Returns:** `tk.Label`
+
+Source: `widgets.py:64-66`
+
+---
+
+### `make_entry(parent, width=18, show="", state="normal")`
+
+Creates a text entry field with dark styling and accent-colored focus border.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="width" type="int" default="18">
+  Width of the entry field in characters
+</ParamField>
+
+<ParamField path="show" type="str" default="''">
+  Character to display instead of actual input:
+  - `''` (empty) for plain text
+  - `'*'` for password masking
+</ParamField>
+
+<ParamField path="state" type="str" default="'normal'">
+  Widget state: `'normal'` or `'disabled'`
+</ParamField>
+
+**Returns:** `tk.Entry`
+
+**Styling:**
+- Background: `BG3` (dark gray)
+- Text color: `TEXT` (light gray/white)
+- Focus highlight: `ACCENT` (blue)
+- Border: `BORDER` (subtle outline)
+
+Source: `widgets.py:69-85`
+
+---
+
+### `make_button(parent, text, cmd, color=ACCENT2, fg="white", **kw)`
+
+Creates a styled button with hand cursor and customizable colors.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="text" type="str" required>
+  Button label text
+</ParamField>
+
+<ParamField path="cmd" type="callable" required>
+  Command (function) to execute when button is clicked
+</ParamField>
+
+<ParamField path="color" type="str" default="ACCENT2">
+  Button background color (default: orange/red action color)
+</ParamField>
+
+<ParamField path="fg" type="str" default="'white'">
+  Button text color
+</ParamField>
+
+<ParamField path="**kw" type="dict">
+  Additional keyword arguments passed to `tk.Button`
+</ParamField>
+
+**Returns:** `tk.Button`
+
+**Styling:**
+- Flat relief (no 3D borders)
+- Hand cursor on hover
+- Bold Consolas font
+- Active state with `BG3` background
+
+Source: `widgets.py:88-101`
+
+---
+
+### `make_listbox(parent, width=70, height=5)`
+
+Creates a listbox with dark styling showing items in accent color.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="width" type="int" default="70">
+  Width in characters
+</ParamField>
+
+<ParamField path="height" type="int" default="5">
+  Height in lines
+</ParamField>
+
+**Returns:** `tk.Listbox`
+
+**Styling:**
+- Background: `BG` (black)
+- Item color: `ACCENT` (blue)
+- Selection: `ACCENT2` background with white text
+
+Source: `widgets.py:104-115`
+
+---
+
+### `make_labelframe(parent, text)`
+
+Creates a ttk.LabelFrame with title in accent color and subtle border.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="text" type="str" required>
+  Frame title/label
+</ParamField>
+
+**Returns:** `ttk.LabelFrame`
+
+Source: `widgets.py:118-120`
+
+---
+
+### `make_scrolled_text(parent, width=88, height=6, fg="#00ff41")`
+
+Creates a scrollable text area with terminal-style green text (by default).
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="width" type="int" default="88">
+  Width in characters
+</ParamField>
+
+<ParamField path="height" type="int" default="6">
+  Height in lines
+</ParamField>
+
+<ParamField path="fg" type="str" default="'#00ff41'">
+  Text color (default: terminal green)
+</ParamField>
+
+**Returns:** `scrolledtext.ScrolledText`
+
+**Styling:**
+- Background: `#010409` (nearly black)
+- Built-in vertical scrollbar
+- Consolas font
+
+**Common use case:** Console log output
+
+Source: `widgets.py:123-135`
+
+---
+
+### `make_title(parent, text)`
+
+Creates and packs a large section title label (orange/red, bold, centered).
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+<ParamField path="text" type="str" required>
+  Title text
+</ParamField>
+
+**Returns:** None (automatically packs the label)
+
+**Styling:**
+- Font: Consolas 12pt bold
+- Color: `ACCENT2` (orange/red)
+- Top/bottom padding: 10px / 4px
+
+Source: `widgets.py:138-143`
+
+---
+
+### `make_scrolled_frame(parent)`
+
+Creates a vertically scrollable frame using Canvas and Scrollbar. Useful for tabs with extensive vertical content.
+
+<ParamField path="parent" type="tk.Widget" required>
+  Parent widget
+</ParamField>
+
+**Returns:** `tk.Frame` — The inner frame where you should place child widgets
+
+**Features:**
+- Automatic scroll region recalculation on resize
+- Mouse wheel support
+- Dark theme styling
+
+**Implementation:**
+- Uses `tk.Canvas` with embedded `tk.Frame`
+- Binds `<Configure>` event to update scroll region
+- Binds `<MouseWheel>` for scroll interaction
+
+Source: `widgets.py:146-175`
+
+## Color Constants
+
+All widget functions reference color constants from `constants.py`:
+
+| Constant | Usage |
+|----------|-------|
+| `BG` | Main background (black) |
+| `BG2` | Panel background (dark gray) |
+| `BG3` | Input field background |
+| `ACCENT` | Primary accent (blue) |
+| `ACCENT2` | Action color (orange/red) |
+| `SUCCESS` | Success indicators (green) |
+| `TEXT` | Primary text color |
+| `TEXT2` | Secondary text color |
+| `BORDER` | Border/outline color |
+
+## Example Usage
+
+```python
+from ui.widgets import make_frame, make_button, make_entry, apply_style
+import tkinter as tk
+
+root = tk.Tk()
+apply_style(root)  # Apply global theme first
+
+frame = make_frame(root)
+frame.pack()
+
+entry = make_entry(frame, width=25)
+entry.pack(side='left', padx=5)
+
+btn = make_button(frame, "Submit", lambda: print(entry.get()))
+btn.pack(side='left')
+
+root.mainloop()
+```
+
+## Related
+
+- [SwitchConfiguratorV2](/api/app) — Main application class
+- [Constants](/api/constants) — Color and configuration constants

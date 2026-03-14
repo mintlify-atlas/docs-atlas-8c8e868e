@@ -1,0 +1,416 @@
+---
+title: 'Security Configuration'
+description: 'Configure enable secret, login block-for, and banner MOTD for device security'
+icon: 'shield'
+---
+
+# Security Configuration
+
+This guide covers **Tab ⑧ Seguridad del Dispositivo (Device Security)** — configuring three critical security features: enable secret (MD5 type-5), login attempt blocking, and message-of-the-day banners.
+
+---
+
+## Overview
+
+The Security tab configures three independent security mechanisms:
+
+1. **Enable Secret (MD5):** Secure password for privileged EXEC mode
+2. **Login Block-for:** Automatic lockout after failed login attempts
+3. **Banner MOTD:** Legal warning displayed before login
+
+All three features are applied **at the end** of the deployment to avoid interfering with the active SSH session.
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:262-275`
+
+---
+
+## Enable Secret (MD5 Type-5)
+
+### What is Enable Secret?
+
+The `enable secret` command sets the password required to enter **privileged EXEC mode** (`enable` command in IOS).
+
+**Type-5 vs. Type-7 Encryption:**
+
+| Command           | Encryption Type | Security Level                     |
+|-------------------|-----------------|------------------------------------||
+| `enable password` | Type-7          | Reversible (weak, avoid using)     |
+| `enable secret`   | Type-5 (MD5)    | Irreversible hash (recommended)    |
+
+<Warning>
+**Always use `enable secret` instead of `enable password`.** Type-7 encryption can be reversed with publicly available tools.
+</Warning>
+
+### Configuring Enable Secret
+
+<Steps>
+  <Step title="Enter password in the 'Contraseña' field">
+    The field is masked with `*` characters for security.
+  </Step>
+
+  <Step title="Deploy configuration">
+    The enable secret is applied **after all other commands** to avoid closing the active SSH session.
+  </Step>
+</Steps>
+
+### Generated IOS Command
+
+```cisco
+enable secret MySecurePassword123
+```
+
+**What Happens:**
+- IOS hashes the password with MD5 and stores it in the running-config:
+  ```
+  enable secret 5 $1$mERr$hx5rVt7rPNoS4wqbXKX7m0
+  ```
+- The plaintext password is **never stored** in the config
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:52-62` and `/home/daytona/workspace/source/ui/tab_security_gre.py:358-362`
+
+### Why It's Applied Last
+
+Changing the enable secret **immediately affects authentication**, but the current SSH session remains active. Applying it last ensures:
+- All other commands execute successfully
+- The deployer doesn't lose access mid-deployment
+
+**Reference:** `/home/daytona/workspace/source/README.md:136-138`
+
+---
+
+## Login Block-for (Failed Attempt Lockout)
+
+### What is Login Block-for?
+
+The `login block-for` command automatically **blocks SSH/VTY access** if too many failed login attempts occur within a time window.
+
+**Syntax:**
+```cisco
+login block-for <block_seconds> attempts <max_attempts> within <window_seconds>
+```
+
+**Example:**
+```cisco
+login block-for 120 attempts 5 within 60
+```
+
+**Meaning:**
+- If **5 failed login attempts** occur within **60 seconds**
+- Block **all** VTY/SSH access for **120 seconds** (2 minutes)
+
+<Note>
+This applies to **all users**, including legitimate administrators. During the block period, even correct credentials will be rejected.
+</Note>
+
+### Configuring Login Block-for
+
+<Steps>
+  <Step title="Enter lockout parameters">
+    - **Intentos máx (Max Attempts):** Number of failed attempts allowed (default: `5`)
+    - **Ventana (Window):** Time window in seconds to count attempts (default: `60`)
+    - **Bloquear (Block Duration):** Lockout duration in seconds (default: `120`)
+  </Step>
+
+  <Step title="Deploy configuration">
+    The command is applied along with `login on-failure log` to record failed attempts in syslog.
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+login block-for 120 attempts 5 within 60
+login on-failure log
+```
+
+**Explanation:**
+- `login on-failure log`: Writes failed login attempts to syslog for security monitoring
+- IOS 15.x enables this feature automatically when `login block-for` is configured
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:64-96` and `/home/daytona/workspace/source/ui/tab_security_gre.py:364-377`
+
+### Verification
+
+Check the current block status:
+
+```cisco
+show login
+```
+
+**Example Output:**
+```
+A default login delay of 1 second is applied.
+If more than 5 login failures occur in 60 seconds, logins will be disabled for 120 seconds.
+```
+
+### Use Case: Brute-Force Protection
+
+**Scenario:** An attacker tries to SSH into the switch with a password-guessing script.
+
+**Without `login block-for`:**
+- Attacker can try thousands of passwords
+- Eventually may guess the correct password
+
+**With `login block-for 120 attempts 5 within 60`:**
+- After 5 failed attempts in 60 seconds, the switch blocks all SSH access for 2 minutes
+- Attacker's script is throttled to ~5 attempts per 3 minutes
+- Brute-force attack becomes infeasible
+
+---
+
+## Banner MOTD (Message of the Day)
+
+### What is Banner MOTD?
+
+The **MOTD (Message Of The Day)** banner is displayed **before login** when a user connects via SSH, Telnet, or console.
+
+**Legal Purpose:**
+In many jurisdictions, displaying an **unauthorized access warning** is required to:
+- Establish expectation of privacy (or lack thereof)
+- Provide legal grounds for prosecution of unauthorized access
+- Satisfy compliance requirements (PCI-DSS, HIPAA, SOX, etc.)
+
+### Configuring Banner MOTD
+
+<Steps>
+  <Step title="Enter banner text">
+    Type your custom message in the text area. A default legal warning is pre-filled:
+    ```
+    **********************************************************************
+    *  ACCESO RESTRINGIDO - Solo personal autorizado                     *
+    *  Toda actividad es monitoreada y registrada.                       *
+    *  El acceso no autorizado es un delito y sera perseguido por ley.   *
+    **********************************************************************
+    ```
+  </Step>
+
+  <Step title="Avoid using the '#' character">
+    IOS uses `#` as the delimiter for the banner command. The app automatically replaces `#` with `*` to prevent syntax errors.
+  </Step>
+
+  <Step title="Deploy configuration">
+    The banner is applied at the end of the command sequence.
+  </Step>
+</Steps>
+
+### Generated IOS Command
+
+```cisco
+banner motd #
+**********************************************************************
+*  ACCESO RESTRINGIDO - Solo personal autorizado                     *
+*  Toda actividad es monitoreada y registrada.                       *
+*  El acceso no autorizado es un delito y sera perseguido por ley.   *
+**********************************************************************
+#
+```
+
+**Syntax Explanation:**
+- `banner motd #<text>#`: The `#` characters delimit the banner text
+- IOS displays everything between the two `#` symbols
+- Newlines and formatting are preserved
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:98-118` and `/home/daytona/workspace/source/ui/tab_security_gre.py:379-384`
+
+### Delimiter Conflict Handling
+
+If your banner text contains the `#` character, IOS will interpret it as the **end delimiter** and truncate the banner.
+
+**Example Problem:**
+```cisco
+banner motd #
+Call #1234 for support
+#
+```
+
+IOS sees the first `#` (in `#1234`) as the end delimiter and only displays:
+```
+Call 
+```
+
+**Solution (Automatic):**
+The app replaces all `#` in the banner text with `*`:
+
+```python
+# ui/tab_security_gre.py:383
+safe_text = banner_text.replace('#', '*')
+cmds.append(f"banner motd #{safe_text}#")
+```
+
+**Result:**
+```cisco
+banner motd #
+Call *1234 for support
+#
+```
+
+---
+
+## Complete Security Example
+
+### Configuration Steps
+
+<Steps>
+  <Step title="Set enable secret">
+    Password: `SecurePass123!`
+  </Step>
+
+  <Step title="Configure login block-for">
+    - Max attempts: `5`
+    - Window: `60` seconds
+    - Block duration: `120` seconds
+  </Step>
+
+  <Step title="Customize banner MOTD">
+    ```
+    ******************************************
+    *  UNAUTHORIZED ACCESS PROHIBITED        *
+    *  All activity is logged and monitored. *
+    ******************************************
+    ```
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+! Enable secret (MD5 type-5)
+enable secret SecurePass123!
+
+! Login block-for (brute-force protection)
+login block-for 120 attempts 5 within 60
+login on-failure log
+
+! Banner MOTD
+banner motd #
+******************************************
+*  UNAUTHORIZED ACCESS PROHIBITED        *
+*  All activity is logged and monitored. *
+******************************************
+#
+```
+
+### Verification Commands
+
+```cisco
+! Verify enable secret is type-5 (MD5)
+show running-config | include enable secret
+
+! Check login block-for status
+show login
+
+! Display current banner
+show running-config | begin banner motd
+```
+
+---
+
+## Preview Commands Before Deployment
+
+Click **"Ver comandos que se generarán"** (Preview Commands) to see the exact IOS commands without deploying them:
+
+```python
+# ui/tab_security_gre.py:126-138
+def _preview_security_commands(app):
+    cmds = build_security_commands(
+        enable_pw   = app.sec_enable_pw.get().strip(),
+        attempts    = app.sec_login_attempts.get().strip(),
+        window      = app.sec_login_window.get().strip(),
+        block_for   = app.sec_login_block.get().strip(),
+        banner_text = app.sec_banner_text.get("1.0", tk.END).strip(),
+    )
+    if cmds:
+        messagebox.showinfo("Comandos de seguridad", "\n".join(cmds))
+```
+
+This shows the output in a popup dialog without connecting to any switches.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_security_gre.py:126-138`
+
+---
+
+## Security Best Practices
+
+<Warning>
+**Critical Security Guidelines**
+
+1. **Always use `enable secret`, never `enable password`**
+   - Type-7 encryption is trivially reversible
+
+2. **Set login block-for conservatively**
+   - Too strict: Legitimate users get locked out
+   - Too lenient: Brute-force attacks succeed
+   - Recommended: 5 attempts in 60 seconds, block for 120 seconds
+
+3. **Include a legal warning in the banner**
+   - Required for prosecution of unauthorized access in most jurisdictions
+   - Check with legal counsel for specific wording
+
+4. **Monitor syslog for failed login attempts**
+   - `login on-failure log` writes to syslog
+   - Set up a syslog server to collect and alert on repeated failures
+
+5. **Use AAA (TACACS+/RADIUS) for production environments**
+   - Local enable secret is single-user and non-auditable
+   - AAA provides per-user authentication and full audit trails
+</Warning>
+
+---
+
+## Compliance Considerations
+
+### PCI-DSS Requirements
+
+**Requirement 8.1.6:** Limit repeated access attempts by locking out the user after not more than six attempts.
+
+**Compliance:** Set `login block-for 600 attempts 6 within 30` for 10-minute lockout.
+
+### HIPAA Security Rule
+
+**§ 164.312(a)(1):** Technical safeguards to prevent unauthorized access.
+
+**Compliance:**
+- Enable secret (password protection)
+- Login block-for (access control)
+- Banner MOTD (access warning)
+
+### Sarbanes-Oxley (SOX)
+
+**Section 404:** Internal controls over financial systems.
+
+**Compliance:** Banner MOTD establishes that the system is monitored and access is restricted.
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Set enable secret password">
+    Choose a strong password with mixed case, numbers, and symbols.
+  </Step>
+
+  <Step title="Configure login block-for">
+    Use default values (5 attempts, 60-second window, 120-second block) or adjust for your environment.
+  </Step>
+
+  <Step title="Customize banner MOTD">
+    Edit the pre-filled legal warning or write your own. Avoid using `#`.
+  </Step>
+
+  <Step title="Preview commands (optional)">
+    Click "Ver comandos que se generarán" to verify syntax.
+  </Step>
+
+  <Step title="Deploy to selected branches">
+    Security commands are applied **last** in the deployment sequence.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tab_security_gre.py:36-139`
+- Command Generator: `/home/daytona/workspace/source/ui/tab_security_gre.py:329-386`
+- Command Builder Integration: `/home/daytona/workspace/source/core/command_builder.py:262-275`
+- README Security Features: `/home/daytona/workspace/source/README.md:69-91`

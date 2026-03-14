@@ -1,0 +1,410 @@
+---
+title: 'command_builder'
+description: 'IOS command generation module — converts GUI configuration into executable Cisco IOS commands'
+icon: 'terminal'
+---
+
+## Overview
+
+The `command_builder` module converts configuration defined in the GUI (VLANs, DHCP, routes, QoS) into lists of IOS commands ready to send to switches. This module is pure business logic with no tkinter dependencies, making it easy to test command generation without launching the GUI.
+
+**Module Path:** `core/command_builder.py`
+
+---
+
+## Functions
+
+### expand_ports()
+
+Normalizes interface names to the full form expected by IOS 15.x.
+
+```python
+def expand_ports(ports_str: str) -> str
+```
+
+<ParamField path="ports_str" type="str" required>
+  Port string in short or long notation. Accepts:
+  - Short range notation: `"Gi0/1-3"`
+  - Comma-separated short: `"Gi0/1,Gi0/3"`
+  - FastEthernet short: `"Fa0/2"`
+  - Already expanded: `"GigabitEthernet0/1"`
+</ParamField>
+
+<ResponseField name="return" type="str">
+  Fully expanded interface names ready for IOS commands:
+  - `"Gi0/1-3"` → `"GigabitEthernet0/1-3"`
+  - `"Gi0/1,Gi0/3"` → `"GigabitEthernet0/1, GigabitEthernet0/3"`
+  - `"Fa0/2"` → `"FastEthernet0/2"`
+</ResponseField>
+
+#### Why This Matters
+
+IOS accepts `interface range` with full names; short form `Gi` sometimes generates errors depending on firmware version. This function normalizes all input to prevent command failures.
+
+#### Example
+
+```python
+from core.command_builder import expand_ports
+
+# Expand single range
+expanded = expand_ports("Gi0/1-3")
+# Returns: "GigabitEthernet0/1-3"
+
+# Expand multiple ports
+expanded = expand_ports("Gi0/1,Gi0/3,Fa0/2")
+# Returns: "GigabitEthernet0/1, GigabitEthernet0/3, FastEthernet0/2"
+
+# Use in interface range command
+ports = "Gi0/1-5"
+cmd = f"interface range {expand_ports(ports)}"
+# cmd = "interface range GigabitEthernet0/1-5"
+```
+
+---
+
+### build_commands()
+
+Generates the complete list of IOS commands in global configuration mode.
+
+```python
+def build_commands(
+    is_l3: bool,
+    chk_intervlan: bool,
+    dhcp_pools: list,
+    vlans_data: list,
+    static_routes: list,
+    chk_ospf: bool,
+    ospf_pid: str,
+    ospf_networks: list,
+    qos_classes: list,
+    pol_entries: list,
+    pol_name: str,
+    service_policies: list,
+    enable_pw: str = "",
+    login_attempts: str = "",
+    login_window: str = "",
+    login_block_for: str = "",
+    banner_text: str = "",
+    gre_tunnels: list = None,
+    log_fn = None,
+) -> list
+```
+
+<ParamField path="is_l3" type="bool" required>
+  `True` if switch has `ip routing` active (auto-detected). Layer 3 switches get SVIs with IP addresses and DHCP pools.
+</ParamField>
+
+<ParamField path="chk_intervlan" type="bool" required>
+  Whether user enabled "Activate ip routing" checkbox in routing tab.
+</ParamField>
+
+<ParamField path="dhcp_pools" type="list[dict]" required>
+  List of DHCP pool configurations. Each dict contains:
+  - `name` (str): Pool name
+  - `net` (str): Network address (e.g., `"192.168.10.0"`)
+  - `mask` (str): Subnet mask (e.g., `"255.255.255.0"`)
+  - `gw` (str): Gateway IP (e.g., `"192.168.10.1"`)
+</ParamField>
+
+<ParamField path="vlans_data" type="list[dict]" required>
+  List of VLAN configurations. Each dict contains:
+  - `id` (str): VLAN ID
+  - `name` (str): VLAN name
+  - `assign_ports` (bool): Whether to assign ports to this VLAN
+  - `ports` (str): Port range string (e.g., `"Gi0/1-3"`)
+  - `port_mode` (str): `"access"` or `"trunk"`
+  - `block_social` (bool): Block Facebook/Twitter via ACL
+  - `custom_acl` (str): Custom ACL rules (one per line)
+  - `dhcp_idx` (int|None): Index into dhcp_pools for gateway IP
+</ParamField>
+
+<ParamField path="static_routes" type="list[dict]" required>
+  List of static route configurations:
+  - `dest` (str): Destination network
+  - `mask` (str): Network mask
+  - `nexthop` (str): Next-hop IP address
+</ParamField>
+
+<ParamField path="chk_ospf" type="bool" required>
+  Whether OSPF is enabled in the UI.
+</ParamField>
+
+<ParamField path="ospf_pid" type="str" required>
+  OSPF process ID (e.g., `"1"`).
+</ParamField>
+
+<ParamField path="ospf_networks" type="list[dict]" required>
+  OSPF network statements:
+  - `network` (str): Network address
+  - `wildcard` (str): Wildcard mask
+  - `area` (str): OSPF area ID
+</ParamField>
+
+<ParamField path="qos_classes" type="list[dict]" required>
+  QoS class-map definitions:
+  - `name` (str): Class name
+  - `match_type` (str): Match type (e.g., `"match-all"`)
+  - `criteria` (str): Match criteria (e.g., `"dscp"`)
+  - `value` (str): Match value (e.g., `"ef"`)
+</ParamField>
+
+<ParamField path="pol_entries" type="list[dict]" required>
+  Policy-map entries defining QoS actions:
+  - `class` (str): Class name to apply action to
+  - `action` (str): QoS action (`"priority"`, `"bandwidth"`, `"police rate"`, `"shape average"`, `"set dscp"`)
+  - `value` (str): Action value (e.g., `"1000000"` for bandwidth)
+</ParamField>
+
+<ParamField path="pol_name" type="str" required>
+  Name of the policy-map.
+</ParamField>
+
+<ParamField path="service_policies" type="list[dict]" required>
+  Service-policy associations:
+  - `iface` (str): Interface name
+  - `dir` (str): Direction (`"input"`, `"output"`, or `"both"`)
+  - `policy` (str): Policy-map name
+</ParamField>
+
+<ParamField path="enable_pw" type="str" default="">
+  Password for `enable secret` (MD5 type-5). Empty = skip.
+</ParamField>
+
+<ParamField path="login_attempts" type="str" default="">
+  Max failed login attempts before blocking.
+</ParamField>
+
+<ParamField path="login_window" type="str" default="">
+  Time window in seconds to count attempts.
+</ParamField>
+
+<ParamField path="login_block_for" type="str" default="">
+  Seconds to block after exceeding attempts.
+</ParamField>
+
+<ParamField path="banner_text" type="str" default="">
+  MOTD banner text. Empty = skip.
+</ParamField>
+
+<ParamField path="gre_tunnels" type="list[dict]" default="None">
+  GRE over IPsec tunnel configurations. Each dict contains tunnel parameters.
+</ParamField>
+
+<ParamField path="log_fn" type="callable" default="None">
+  Optional logging function. Signature: `log_fn(str)`. If `None`, no logging occurs.
+</ParamField>
+
+<ResponseField name="return" type="list[str]">
+  IOS commands in correct order ready to send to switch.
+</ResponseField>
+
+#### Command Generation Order
+
+1. **IP Routing** — Enables `ip routing` and `service dhcp` for L3 switches
+2. **DHCP Pools** — Creates pools with network, gateway, and DNS (L3 only)
+3. **VLANs** — Creates VLANs with names
+4. **Port Assignment** — Assigns ports to VLANs (access or trunk mode)
+5. **Security ACLs** — Creates extended named ACLs for social media blocking and custom rules
+6. **SVIs** — Configures Switch Virtual Interfaces with IP addresses and ACLs (L3 only)
+7. **Static Routes** — Adds static routes including default route
+8. **OSPF** — Configures OSPF process and network statements
+9. **QoS Class-Maps** — Defines traffic classification
+10. **QoS Policy-Map** — Defines QoS actions per class
+11. **Service-Policy** — Applies policy-maps to interfaces
+12. **Security** — Sets enable secret, login blocking, banner MOTD
+13. **GRE/IPsec** — Configures tunnels for site-to-site VPN
+
+#### Example
+
+```python
+from core.command_builder import build_commands
+
+# Example configuration
+dhcp_pools = [
+    {'name': 'VLAN10', 'net': '192.168.10.0', 'mask': '255.255.255.0', 'gw': '192.168.10.1'},
+    {'name': 'VLAN20', 'net': '192.168.20.0', 'mask': '255.255.255.0', 'gw': '192.168.20.1'},
+]
+
+vlans_data = [
+    {
+        'id': '10',
+        'name': 'VENTAS',
+        'assign_ports': True,
+        'ports': 'Gi0/1-5',
+        'port_mode': 'access',
+        'block_social': True,
+        'custom_acl': '',
+        'dhcp_idx': 0,
+    },
+    {
+        'id': '20',
+        'name': 'IT',
+        'assign_ports': True,
+        'ports': 'Gi0/6-10',
+        'port_mode': 'access',
+        'block_social': False,
+        'custom_acl': 'deny tcp any host 203.0.113.50 eq 80',
+        'dhcp_idx': 1,
+    },
+]
+
+static_routes = [
+    {'dest': '0.0.0.0', 'mask': '0.0.0.0', 'nexthop': '192.168.1.254'},
+]
+
+# Generate commands
+cmds = build_commands(
+    is_l3=True,
+    chk_intervlan=True,
+    dhcp_pools=dhcp_pools,
+    vlans_data=vlans_data,
+    static_routes=static_routes,
+    chk_ospf=False,
+    ospf_pid="1",
+    ospf_networks=[],
+    qos_classes=[],
+    pol_entries=[],
+    pol_name="",
+    service_policies=[],
+    enable_pw="MySecretPass",
+    login_attempts="3",
+    login_window="60",
+    login_block_for="300",
+    banner_text="Unauthorized access prohibited",
+)
+
+# cmds contains IOS commands like:
+# ['ip routing', 'service dhcp', 'ip dhcp excluded-address 192.168.10.1', ...]
+```
+
+---
+
+### build_cleanup_commands()
+
+Reads running-config and generates `no ...` commands to clean only what this app previously configured.
+
+```python
+def build_cleanup_commands(
+    nc,
+    static_routes: list,
+    ospf_networks: list,
+    log_fn = None
+) -> list
+```
+
+<ParamField path="nc" type="netmiko.ConnectHandler" required>
+  Active Netmiko connection (already in enable mode).
+</ParamField>
+
+<ParamField path="static_routes" type="list[dict]" required>
+  Routes that the app configured (used to determine which routes to delete). Same format as `build_commands()`.
+</ParamField>
+
+<ParamField path="ospf_networks" type="list[dict]" required>
+  OSPF networks that the app configured (same format as `build_commands()`).
+</ParamField>
+
+<ParamField path="log_fn" type="callable" default="None">
+  Optional logging function.
+</ParamField>
+
+<ResponseField name="return" type="list[str]">
+  Cleanup commands ready to send to switch.
+</ResponseField>
+
+#### Protected Resources
+
+The cleanup function **NEVER** touches:
+- SSH configuration, users, VTY lines, crypto keys (preserves remote access)
+- Uplink interface (defined by `UPLINK_IFACE` constant)
+- Static routes and OSPF networks NOT configured by this app
+- VLAN 1 (native VLAN, not deleted)
+
+#### What Gets Cleaned
+
+- DHCP pools and exclusions
+- Security ACLs with prefix `SEGURIDAD_VLAN_`
+- Service-policies on interfaces
+- Policy-maps and class-maps
+- SVI IP addresses and ACL associations (except VLAN 1)
+- Port VLAN assignments (access/trunk mode)
+- VLANs (except VLAN 1)
+- Static routes that match `static_routes` parameter
+- OSPF network statements that match `ospf_networks` parameter
+
+#### Example
+
+```python
+from core.connector import make_device_params
+from core.command_builder import build_cleanup_commands
+from netmiko import ConnectHandler
+
+# Connect to switch
+sw = {'ip': '192.168.1.10', 'user': 'admin', 'pass': 'cisco', 'secret': 'cisco'}
+nc = ConnectHandler(**make_device_params(sw))
+nc.enable()
+
+# Define what the app previously configured
+static_routes = [
+    {'dest': '0.0.0.0', 'mask': '0.0.0.0', 'nexthop': '192.168.1.254'},
+]
+
+ospf_networks = [
+    {'network': '192.168.10.0', 'wildcard': '0.0.0.255', 'area': '0'},
+]
+
+# Generate cleanup commands
+cleanup_cmds = build_cleanup_commands(
+    nc,
+    static_routes=static_routes,
+    ospf_networks=ospf_networks,
+    log_fn=print,
+)
+
+# cleanup_cmds contains:
+# ['no ip dhcp pool VLAN10', 'no ip dhcp excluded-address 192.168.10.1', 
+#  'no ip access-list extended SEGURIDAD_VLAN_10', ...]
+
+nc.disconnect()
+```
+
+---
+
+## Usage Notes
+
+### Layer 2 vs Layer 3 Detection
+
+The module automatically adapts command generation based on the `is_l3` parameter:
+
+- **Layer 3 switches** receive:
+  - `ip routing` and `service dhcp` commands
+  - DHCP pool configurations
+  - SVI interfaces with IP addresses
+  - Static routes and OSPF configuration
+
+- **Layer 2 switches** skip:
+  - All IP routing commands
+  - DHCP pools (DHCP handled by upstream router)
+  - SVI IP address assignment
+  - Logs info message about L2 detection
+
+### Protected Uplink Interface
+
+The `UPLINK_IFACE` constant (default: `"GigabitEthernet0/0"`) defines the management/uplink interface that:
+- Never gets cleaned by `build_cleanup_commands()`
+- Never receives service-policy associations
+- Connects the switch to router/core and must not be modified
+
+### Command Execution Tips
+
+1. **Always use config mode**: Send generated commands inside `config_mode()`
+2. **Save configuration**: Call `save_config()` after applying commands
+3. **Use cleanup before reconfig**: Call `build_cleanup_commands()` before `build_commands()` to avoid conflicts
+4. **Monitor with logging**: Pass a `log_fn` to track command generation and execution
+
+---
+
+## See Also
+
+- [connector](/api/connector) — Functions to send these commands to switches
+- [constants](/api/constants) — `UPLINK_IFACE` and other configuration constants

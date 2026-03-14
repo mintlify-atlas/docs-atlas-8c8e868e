@@ -1,0 +1,284 @@
+---
+title: 'VLANs & Port Assignment'
+description: 'Create VLANs, assign physical ports, link DHCP pools, and apply ACLs'
+icon: 'network-wired'
+---
+
+# VLANs & Port Assignment
+
+This guide covers **Tab ③ VLANs y Puertos** — where you define VLANs, assign physical switch ports (access or trunk mode), link DHCP pools, and configure security ACLs.
+
+---
+
+## Overview
+
+Each VLAN configuration includes:
+
+1. **Basic Data:** VLAN ID and descriptive name
+2. **DHCP Binding:** Link to a DHCP pool (for SVI IP assignment on L3 switches)
+3. **Port Assignment:** Physical interfaces in access or trunk mode
+4. **Security ACLs:** Optional packet filtering (social media blocking, custom rules)
+
+---
+
+## Creating a VLAN
+
+### Basic VLAN Data
+
+<Steps>
+  <Step title="Enter VLAN ID and Name">
+    - **ID VLAN:** Numeric identifier (e.g., `10`, `20`, `100`)
+      - Valid range: `2-4094` (VLAN 1 is reserved for native/management)
+    - **Name:** Descriptive label (e.g., `VENTAS`, `PRODUCCION`, `GUEST_WIFI`)
+  </Step>
+</Steps>
+
+---
+
+## DHCP Pool Binding
+
+<Steps>
+  <Step title="Enable DHCP assignment">
+    Check **"Asignar pool DHCP"** to link this VLAN to a pool defined in Tab ②.
+  </Step>
+
+  <Step title="Select a pool from the dropdown">
+    Choose a pool by index (e.g., `0: VLAN10_POOL`). If no pools appear, click the **↻ refresh button** or go back to Tab ② to create them.
+  </Step>
+</Steps>
+
+### What Happens on Layer 3 Switches
+
+When you link a DHCP pool to a VLAN, the generated commands create an **SVI** (Switch Virtual Interface) with the pool's gateway IP:
+
+```cisco
+interface vlan 10
+ ip address 192.168.10.1 255.255.255.0
+ no shutdown
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:191-207`
+
+<Note>
+**Layer 2 Switches:** The pool is still associated with the VLAN for documentation purposes, but no SVI IP is configured. DHCP must be provided by R1 (router-on-a-stick).
+</Note>
+
+---
+
+## Port Assignment
+
+### Assigning Physical Interfaces
+
+<Steps>
+  <Step title="Enable port assignment">
+    Check **"Asignar puertos a esta VLAN"** to activate the port fields.
+  </Step>
+
+  <Step title="Specify port ranges">
+    Use Cisco shorthand notation:
+    - **Single port:** `Gi0/1` or `GigabitEthernet0/1`
+    - **Range:** `Gi0/1-3` (expands to Gi0/1, Gi0/2, Gi0/3)
+    - **Multiple:** `Gi0/1,Gi0/3` (comma-separated)
+
+    Example: `Gi0/1-3,Gi0/5` → ports 1, 2, 3, and 5
+  </Step>
+
+  <Step title="Select mode: Access or Trunk">
+    - **Access:** Single VLAN per port (for end devices: PCs, phones, printers)
+    - **Trunk:** Multiple VLANs tagged (for inter-switch links or router connections)
+  </Step>
+</Steps>
+
+<Warning>
+**Protected Interface: `GigabitEthernet0/0`**
+
+The uplink interface `Gi0/0` is the management/WAN connection and **cannot be assigned to any VLAN**. The app rejects any configuration attempting to modify it.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_vlan.py:171-174`
+</Warning>
+
+### Generated IOS Commands
+
+#### Access Mode (Single VLAN)
+
+```cisco
+interface range GigabitEthernet0/1-3
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+ no shutdown
+ exit
+```
+
+**Explanation:**
+- `portfast`: Bypasses STP 30-second delay (safe for end devices)
+- `no shutdown`: Activates the ports immediately
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:159-167`
+
+#### Trunk Mode (Multiple VLANs)
+
+```cisco
+interface range GigabitEthernet0/1-2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan add 10
+ no shutdown
+ exit
+```
+
+**Explanation:**
+- `dot1q`: IEEE 802.1Q VLAN tagging (standard)
+- `allowed vlan add 10`: Incrementally adds VLAN 10 to the trunk (preserves existing VLANs)
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:149-157`
+
+---
+
+## Security ACLs
+
+### Blocking Social Media
+
+Check **"Bloquear Redes Sociales"** to deny HTTPS access to Facebook and Twitter:
+
+```cisco
+ip access-list extended SEGURIDAD_VLAN_10
+ deny tcp any host 157.240.22.35 eq 443
+ deny tcp any host 104.244.42.1 eq 443
+ permit ip any any
+ exit
+```
+
+**Applied to SVI:**
+```cisco
+interface vlan 10
+ ip access-group SEGURIDAD_VLAN_10 in
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:173-186`
+
+<Note>
+The IPs (`157.240.22.35` for Facebook, `104.244.42.1` for Twitter) are hardcoded examples. Update them in `command_builder.py:179-180` if these IPs change or if you need to block different services.
+</Note>
+
+### Custom ACL Rules
+
+Add your own IOS ACL statements in the text area, one per line:
+
+**Example:**
+```
+deny ip host 10.0.0.5 any
+deny tcp any any eq 23
+permit tcp any any eq 80
+```
+
+These rules are inserted **before** the final `permit ip any any` statement.
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:184-185`
+
+<Warning>
+ACLs are only applied to **Layer 3 switches** with SVIs. On Layer 2 switches, ACLs must be configured on the upstream router (R1).
+</Warning>
+
+---
+
+## Complete VLAN Example
+
+Here's a full configuration for **VLAN 10 (Sales Department)**:
+
+<Steps>
+  <Step title="VLAN data">
+    - ID: `10`
+    - Name: `VENTAS`
+  </Step>
+
+  <Step title="DHCP pool">
+    - Link to pool: `0: VLAN10_POOL` (192.168.10.0/24, GW: 192.168.10.1)
+  </Step>
+
+  <Step title="Ports">
+    - Assign: `Gi0/1-3`
+    - Mode: `access`
+  </Step>
+
+  <Step title="Security">
+    - Block social media: **Yes**
+    - Custom ACL: `deny tcp any any eq 23` (block Telnet)
+  </Step>
+</Steps>
+
+### Generated Commands (Layer 3 Switch)
+
+```cisco
+! Create VLAN
+vlan 10
+ name VENTAS
+ exit
+
+! Assign ports
+interface range GigabitEthernet0/1-3
+ switchport mode access
+ switchport access vlan 10
+ spanning-tree portfast
+ no shutdown
+ exit
+
+! ACL
+ip access-list extended SEGURIDAD_VLAN_10
+ deny tcp any host 157.240.22.35 eq 443
+ deny tcp any host 104.244.42.1 eq 443
+ deny tcp any any eq 23
+ permit ip any any
+ exit
+
+! SVI with DHCP pool's gateway IP
+interface vlan 10
+ ip address 192.168.10.1 255.255.255.0
+ no shutdown
+ ip access-group SEGURIDAD_VLAN_10 in
+ exit
+
+! DHCP pool
+ip dhcp excluded-address 192.168.10.1
+ip dhcp pool VLAN10_POOL
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.1
+ dns-server 8.8.8.8
+ exit
+```
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Define VLAN ID and name">
+    Numeric identifier and descriptive label.
+  </Step>
+
+  <Step title="Link to DHCP pool (optional)">
+    Associates a subnet/gateway with this VLAN (creates SVI on L3).
+  </Step>
+
+  <Step title="Assign ports (optional)">
+    Specify physical interfaces in access or trunk mode.
+  </Step>
+
+  <Step title="Configure ACLs (optional)">
+    Block social media or add custom packet filters.
+  </Step>
+
+  <Step title="Click 'Guardar VLAN'">
+    The VLAN is added to the in-memory list. Repeat for additional VLANs.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tab_vlan.py`
+- VLAN Commands: `/home/daytona/workspace/source/core/command_builder.py:130-207`
+- Port Expansion: `/home/daytona/workspace/source/core/command_builder.py:19-50`

@@ -1,0 +1,127 @@
+---
+title: Introduction
+description: Overview of SECURE-BRANCH-lac, a GUI tool for mass configuration of Cisco IOSvL2 switches
+---
+
+## What is SECURE-BRANCH-lac?
+
+SECURE-BRANCH-lac is a graphical user interface (GUI) tool designed to configure Cisco IOSvL2 switches at scale across multiple branch locations. The tool simplifies the process of deploying consistent network configurations to N number of branches through an intuitive tabbed interface.
+
+<Note>
+**Current Version:** v2.2 | IOSvL2 15.2 / GRE-IPsec / S3 Backup
+</Note>
+
+## Target Firmware
+
+SECURE-BRANCH-lac is specifically designed for:
+- **Firmware:** `vios_l2-ADVENTERPRISEK9-M`
+- **IOS Version:** Experimental 15.2 (20200924:215240)
+
+The tool includes automatic L2/L3 detection to ensure appropriate commands are applied based on switch capabilities.
+
+## Key Capabilities
+
+SECURE-BRANCH-lac provides comprehensive network configuration management through nine specialized modules:
+
+### Core Network Features
+
+<CardGroup cols={2}>
+  <Card title="Branches & DHCP" icon="network-wired">
+    Add switches with SSH connectivity and define DHCP pools for automatic IP assignment
+  </Card>
+  
+  <Card title="VLANs & Ports" icon="ethernet">
+    Create VLANs, configure access/trunk ports, and link DHCP pools to network segments
+  </Card>
+  
+  <Card title="Routing" icon="route">
+    Enable IP routing, configure static routes, default gateways, and OSPF dynamic routing
+  </Card>
+  
+  <Card title="QoS MQC" icon="gauge">
+    Define class-maps, policy-maps with policing/shaping/priority, and apply service-policies
+  </Card>
+</CardGroup>
+
+### Advanced Features
+
+<CardGroup cols={2}>
+  <Card title="Device Security" icon="shield">
+    Configure enable secret (MD5), login block for failed attempts, and MOTD banners
+  </Card>
+  
+  <Card title="GRE over IPsec" icon="lock">
+    Deploy encrypted GRE tunnels with IKEv1 + ESP-AES-256 for multicast/broadcast support
+  </Card>
+  
+  <Card title="Backup & Restore" icon="cloud-arrow-up">
+    Export/import JSON configurations, download running-config locally, or upload to AWS S3 with AES-256 encryption
+  </Card>
+  
+  <Card title="Execution" icon="play">
+    Select branches and deploy configurations with real-time logging and progress tracking
+  </Card>
+</CardGroup>
+
+## Configuration Workflow
+
+The typical configuration workflow follows this sequence:
+
+| Step | Tab | Purpose |
+|------|-----|----------|
+| ① | **Branches** | Add switches with IP addresses, credentials, and test SSH connectivity |
+| ② | **DHCP** | Define DHCP pools with network, mask, and gateway |
+| ③ | **VLANs & Ports** | Create VLANs, assign ports (access/trunk), and link DHCP pools |
+| ④ | **Routing** | Enable IP routing, configure static routes, default route, and OSPF |
+| ⑤ | **QoS MQC** | Define class-maps (DSCP/IP/ACL), policy-maps, and service-policies |
+| ⑥ | **Execution** | Select branches and apply configuration with real-time logging |
+| ⑦ | **Backup** | Export/import JSON, download running-config, or upload to AWS S3 |
+| ⑧ | **Security** | Configure enable secret, login blocking, and banner MOTD |
+| ⑨ | **GRE/IPsec** | Deploy encrypted GRE tunnels with IPsec |
+
+## Built-in Protections
+
+SECURE-BRANCH-lac includes several safety mechanisms to prevent misconfigurations:
+
+<Warning>
+**GigabitEthernet0/0 Protection**
+
+The uplink interface `GigabitEthernet0/0` is **never modified** by the tool. This interface is typically used for management connectivity, and altering it could result in loss of access to the switch.
+</Warning>
+
+| Protection | Detail |
+|------------|--------|
+| **Uplink Interface** | `GigabitEthernet0/0` is never modified (management uplink) |
+| **SSH/VTY Preservation** | SSH configuration, VTY lines, and crypto keys are never touched |
+| **L2 Switch Detection** | Automatically skips `ip routing` and SVI IP configuration on Layer 2-only switches |
+| **Selective Cleanup** | Only removes configurations created by the app; preserves pre-existing routes and OSPF |
+| **Enable Secret Timing** | Applied at the **end** of deployment to prevent SSH session termination |
+
+## Architecture
+
+The project is organized into a modular structure:
+
+```
+SECURE-BRANCH-lac/
+│
+├── app.py                   # Entry point + main class (SwitchConfiguratorV2)
+├── constants.py             # Colors, version, UPLINK_IFACE, DSCP_PRESETS
+│
+├── core/                    # Business logic — no Tkinter dependencies
+│   ├── command_builder.py   # Generates IOS commands (DHCP, VLANs, ACLs, OSPF, QoS,
+│   │                        #   Security, GRE over IPsec)
+│   └── connector.py         # SSH connection, L2/L3 detection, command execution
+│
+└── ui/                      # Tkinter GUI
+    ├── widgets.py            # Styled widget factory (buttons, entries, etc.)
+    ├── tabs_sw_dhcp.py       # Tabs ① Branches and ② DHCP
+    ├── tab_vlan.py           # Tab ③ VLANs and Ports
+    ├── tab_routing.py        # Tab ④ Routing (routes + OSPF)
+    ├── tab_qos.py            # Tab ⑤ QoS MQC (class-map, policy-map, service-policy)
+    ├── tab_exec_backup.py    # Tabs ⑥ Execution and ⑦ Backup (local + AWS S3)
+    └── tab_security_gre.py   # Tabs ⑧ Security and ⑨ GRE over IPsec
+```
+
+<Tip>
+The separation between `core/` (business logic) and `ui/` (interface) allows for potential CLI or API implementations in the future without rewriting the configuration generation logic.
+</Tip>

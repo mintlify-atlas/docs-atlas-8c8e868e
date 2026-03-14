@@ -1,0 +1,354 @@
+---
+title: 'Backup & AWS S3 Integration'
+description: 'Export/import JSON configuration and upload running-config to AWS S3 with SSE-AES256 encryption'
+---
+
+## Overview
+
+Tab ⑦ (Backup) provides three backup methods:
+
+1. **Export/Import JSON** — Save app configuration (VLANs, DHCP, QoS) for version control
+2. **Download running-config** — Fetch `show running-config` to local `.txt` file
+3. **AWS S3 Backup** — Upload running-config to S3 bucket with server-side encryption
+
+## Export/Import JSON
+
+### Export Configuration
+
+The **💾 Exportar .json** button saves the current app state to a JSON file:
+
+```python
+def export_config(app):
+    payload = {
+        "meta": {
+            "version": "2.1",
+            "exported": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+        "sucursales":      [{k: v for k, v in s.items() if k not in ('pass', 'secret')}
+                            for s in app.sucursales],
+        "dhcp_pools":      app.dhcp_pools,
+        "vlans":           app.vlans_data,
+        "static_routes":   app.static_routes,
+        "ospf_networks":   app.ospf_networks,
+        "ospf_enabled":    app.chk_ospf.get(),
+        "ospf_pid":        app.ospf_pid.get().strip(),
+        "qos_classes":     app.qos_classes,
+        "pol_entries":     app.pol_entries,
+        "pol_name":        app.pol_name.get().strip(),
+        "service_policies":app.service_policies,
+    }
+```
+
+**File format**: `config_YYYYMMDD_HHMMSS.json`
+
+Reference: `tab_exec_backup.py:309-346`
+
+<Note>
+**Security**: Passwords and enable secrets are **excluded** from the export. Branch entries only include `name`, `ip`, and `user`.
+</Note>
+
+### Import Configuration
+
+The **📂 Importar .json** button loads a previously exported JSON file:
+
+- Replaces current DHCP pools, VLANs, routes, OSPF networks, and QoS settings
+- **Does NOT** deploy to switches — only updates the app state in memory
+- Refreshes all listboxes automatically
+
+<Warning>
+Importing **overwrites** the current configuration in the app. Make sure to export before importing if you want to preserve the current state.
+</Warning>
+
+Reference: `tab_exec_backup.py:348-404`
+
+## Download Running-Config (Local)
+
+The **⬇ Descargar running-config** button downloads the current switch configuration:
+
+### Process
+
+1. Select a branch from Tab ①
+2. Click the download button
+3. The app connects via SSH and runs `show running-config`
+4. Output is saved to a `.txt` file with a metadata header
+
+### File Format
+
+```
+# Backup 2025-04-10 14:30:00
+# Sucursal: SW-CDMX  IP: 192.168.1.10
+
+Building configuration...
+Current configuration : 4521 bytes
+!
+version 15.2
+...
+```
+
+**File name**: `running_SW-CDMX_20250410_143000.txt`
+
+### Implementation
+
+```python
+def fetch_running_config(sw: dict) -> str:
+    """
+    Descarga el running-config actual del switch.
+    """
+    nc  = ConnectHandler(**make_device_params(sw))
+    nc.enable()
+    raw = nc.send_command("show running-config", delay_factor=4)
+    nc.disconnect()
+    return raw
+```
+
+Reference: `connector.py:218-238` and `tab_exec_backup.py:461-494`
+
+<Note>
+The download only works for **one branch at a time**. If multiple branches are selected, only the first one is used.
+</Note>
+
+## AWS S3 Backup
+
+The S3 backup feature uploads running-config from **multiple selected branches** to an S3 bucket with automatic encryption.
+
+### Requirements
+
+Install boto3:
+
+```bash
+pip install boto3 --break-system-packages
+```
+
+### Configuration Fields
+
+| Field | Description | Example |
+|-------|-------------|--------|
+| **Access Key ID** | AWS IAM access key | `AKIAIOSFODNN7EXAMPLE` |
+| **Secret Access Key** | AWS IAM secret key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
+| **Región AWS** | S3 region | `us-east-1` |
+| **Bucket S3** | Bucket name | `mi-bucket-backups` |
+| **Prefijo/carpeta** | Prefix/folder path | `backups/switches/` |
+
+Reference: `tab_exec_backup.py:262-293`
+
+### S3 Path Format
+
+Files are stored with this structure:
+
+```
+<prefijo>/<nombre-sucursal>/<YYYY-MM-DD_HH-MM-SS>.txt
+```
+
+**Example**:
+
+```
+backups/switches/SW-CDMX/2025-04-10_14-30-00.txt
+```
+
+Spaces in branch names are replaced with underscores:
+
+```python
+safe_name = sw_name.replace(" ", "_")
+s3_key    = f"{prefix}/{safe_name}/{timestamp}.txt"
+```
+
+Reference: `tab_exec_backup.py:608-611`
+
+### File Content
+
+Each uploaded file includes a metadata header:
+
+```
+# Backup generado por Configurador IOSvL2
+# Sucursal : SW-CDMX  (192.168.1.10)
+# Fecha    : 2025-04-10 14:30:00
+# Bucket   : s3://mi-bucket-backups/backups/switches/SW-CDMX/2025-04-10_14-30-00.txt
+############################################################
+
+Building configuration...
+Current configuration : 4521 bytes
+...
+```
+
+Reference: `tab_exec_backup.py:614-621`
+
+### Server-Side Encryption (SSE-AES256)
+
+All uploads use AWS-managed encryption at rest:
+
+```python
+client.put_object(
+    Bucket               = bucket,
+    Key                  = s3_key,
+    Body                 = content,
+    ContentType          = "text/plain; charset=utf-8",
+    ServerSideEncryption = "AES256",  # cifrado en reposo (SSE-S3)
+)
+```
+
+**Encryption Type**: SSE-S3 (AWS-managed keys)
+
+**Cost**: $0 extra — encryption is included in S3 standard pricing
+
+Reference: `tab_exec_backup.py:626-632`
+
+<Note>
+The `ContentType` is set to `text/plain; charset=utf-8` so the file displays correctly when opened in the AWS Console browser viewer.
+</Note>
+
+### Credential Verification
+
+The **🔍 Verificar credenciales S3** button tests the connection **without uploading data**:
+
+```python
+def verify_s3_credentials(app):
+    client, bucket = _get_s3_client(app)
+    client.head_bucket(Bucket=bucket)  # $0 cost, only checks access
+```
+
+**Checks**:
+- Access Key and Secret Key are valid
+- Bucket exists
+- IAM permissions allow `s3:GetBucketLocation` and `s3:PutObject`
+
+Reference: `tab_exec_backup.py:550-572`
+
+### Upload Process
+
+The **☁ Subir a S3 (sucursales seleccionadas)** button:
+
+<Steps>
+  <Step title="Validate Credentials">
+    Calls `_get_s3_client(app)` to create the boto3 client and verify all fields are filled.
+  </Step>
+  
+  <Step title="Fetch Running-Config">
+    For each selected branch:
+    ```python
+    raw = fetch_running_config(sw)
+    ```
+    Connects via SSH and runs `show running-config`.
+  </Step>
+  
+  <Step title="Build S3 Key">
+    Constructs the object path:
+    ```python
+    safe_name = sw_name.replace(" ", "_")
+    s3_key    = f"{prefix}/{safe_name}/{timestamp}.txt"
+    ```
+  </Step>
+  
+  <Step title="Upload to S3">
+    ```python
+    client.put_object(
+        Bucket               = bucket,
+        Key                  = s3_key,
+        Body                 = (header + raw).encode("utf-8"),
+        ContentType          = "text/plain; charset=utf-8",
+        ServerSideEncryption = "AES256",
+    )
+    ```
+  </Step>
+  
+  <Step title="Show Results">
+    Displays a summary:
+    ```
+    === Backup S3 — 2025-04-10_14-30-00 ===
+    
+    ✔ SW-CDMX → s3://mi-bucket-backups/backups/switches/SW-CDMX/2025-04-10_14-30-00.txt
+    ✔ SW-GDL  → s3://mi-bucket-backups/backups/switches/SW-GDL/2025-04-10_14-30-00.txt
+    ```
+  </Step>
+</Steps>
+
+Reference: `tab_exec_backup.py:574-653`
+
+### Error Handling
+
+<AccordionGroup>
+  <Accordion title="boto3 Not Installed">
+    ```
+    ImportError: boto3 no está instalado.
+    Ejecuta en la terminal:
+      pip install boto3 --break-system-packages
+    ```
+    
+    Install boto3 and retry.
+  </Accordion>
+  
+  <Accordion title="Missing Fields">
+    ```
+    ValueError: Completa todos los campos de AWS S3:
+    Access Key ID, Secret Access Key, Región y Bucket.
+    ```
+    
+    Fill in all required fields in the S3 configuration section.
+  </Accordion>
+  
+  <Accordion title="Invalid Credentials">
+    ```
+    botocore.exceptions.ClientError: An error occurred (InvalidAccessKeyId) 
+    when calling the PutObject operation: The AWS Access Key Id you provided 
+    does not exist in our records.
+    ```
+    
+    Verify Access Key and Secret Key are correct. Use the **Verificar credenciales** button to test.
+  </Accordion>
+  
+  <Accordion title="Bucket Does Not Exist">
+    ```
+    botocore.exceptions.ClientError: An error occurred (NoSuchBucket) 
+    when calling the PutObject operation: The specified bucket does not exist
+    ```
+    
+    Check the bucket name and region. The bucket must exist before uploading.
+  </Accordion>
+  
+  <Accordion title="Permission Denied">
+    ```
+    botocore.exceptions.ClientError: An error occurred (AccessDenied) 
+    when calling the PutObject operation: Access Denied
+    ```
+    
+    The IAM user needs `s3:PutObject` permission on the bucket. Update the IAM policy:
+    
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Action": ["s3:PutObject", "s3:GetBucketLocation"],
+        "Resource": [
+          "arn:aws:s3:::mi-bucket-backups",
+          "arn:aws:s3:::mi-bucket-backups/*"
+        ]
+      }]
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+<Warning>
+**Credentials are NOT saved**: AWS credentials entered in the UI are **never** written to disk or included in JSON exports. You must re-enter them each session.
+</Warning>
+
+**Best Practices**:
+
+- Use an IAM user with **least-privilege** permissions (only `s3:PutObject` and `s3:GetBucketLocation`)
+- Enable **S3 bucket versioning** to keep historical backups
+- Set up **S3 lifecycle policies** to automatically delete old backups (e.g., after 90 days)
+- Use **MFA Delete** on the bucket for extra protection against accidental deletion
+
+Reference: README.md lines 103-128
+
+## Preview Area
+
+The bottom of Tab ⑦ shows a preview of:
+
+- Exported JSON (first 2000 chars)
+- Downloaded running-config (first 4000 chars)
+- S3 upload results (summary)
+
+Reference: `tab_exec_backup.py:303-306`, `tab_exec_backup.py:496-500`

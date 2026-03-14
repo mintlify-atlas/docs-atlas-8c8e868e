@@ -1,0 +1,121 @@
+---
+title: 'SwitchConfiguratorV2'
+description: 'Main application class that orchestrates all tabs and maintains global state'
+---
+
+## Overview
+
+The `SwitchConfiguratorV2` class is the main application controller that:
+- Orchestrates all nine configuration tabs
+- Maintains global state for switches, VLANs, DHCP pools, routing, QoS, and GRE tunnels
+- Applies consistent visual styling across the entire application
+- Manages the Tkinter window and notebook widget structure
+
+Defined in: `source/app.py:47-119`
+
+## Constructor
+
+### `__init__(root)`
+
+Initializes the main application window and all configuration tabs.
+
+<ParamField path="root" type="tk.Tk" required>
+  The Tkinter root window instance
+</ParamField>
+
+**Behavior:**
+- Sets window title to "Configurador IOSvL2 — {APP_VERSION}"
+- Sets initial geometry to 980x800 pixels
+- Applies dark theme styling via `apply_style()`
+- Initializes all state attributes to empty lists
+- Creates nine tabs in a ttk.Notebook widget
+- Calls builder functions for each tab module
+
+## State Attributes
+
+All state attributes are initialized as empty lists (or `None` for `detected_l3`). They are populated and modified by the various tab modules.
+
+<ParamField path="sucursales" type="list[dict]">
+  Switches that the application can configure. Each dict typically contains connection info (IP, credentials, hostname).
+</ParamField>
+
+<ParamField path="dhcp_pools" type="list[dict]">
+  DHCP pool definitions. Each dict contains pool name, network, gateway, DNS servers, etc.
+</ParamField>
+
+<ParamField path="vlans_data" type="list[dict]">
+  VLAN configurations including VLAN ID, name, associated ports, DHCP settings, and ACLs.
+</ParamField>
+
+<ParamField path="static_routes" type="list[dict]">
+  Static route entries. Each dict contains destination network, subnet mask, next-hop, and optional administrative distance.
+</ParamField>
+
+<ParamField path="ospf_networks" type="list[dict]">
+  Networks to be announced via OSPF. Each dict contains network address, wildcard mask, and area ID.
+</ParamField>
+
+<ParamField path="qos_classes" type="list[dict]">
+  QoS class-map definitions for traffic classification.
+</ParamField>
+
+<ParamField path="pol_entries" type="list[dict]">
+  Policy-map entries that define QoS actions for each traffic class.
+</ParamField>
+
+<ParamField path="service_policies" type="list[dict]">
+  Service-policy applications to specific interfaces (direction: input/output).
+</ParamField>
+
+<ParamField path="gre_tunnels" type="list[dict]">
+  GRE over IPsec tunnel configurations (added in v2.2). Each dict contains tunnel parameters, IPsec profiles, and encryption settings.
+</ParamField>
+
+<ParamField path="detected_l3" type="bool | None">
+  Last L2/L3 detection result:
+  - `True`: Layer 3 switch detected
+  - `False`: Layer 2 switch detected
+  - `None`: No detection performed yet
+</ParamField>
+
+## Tab Structure
+
+The application creates nine tabs in a ttk.Notebook widget:
+
+| Tab | Attribute | Label | Builder Function | Purpose |
+|-----|-----------|-------|------------------|----------|
+| 1 | `tab_sw` | "① Sucursales" | `build_tab_sw()` | Manage switches/branches |
+| 2 | `tab_dhcp` | "② DHCP" | `build_tab_dhcp()` | Configure DHCP pools |
+| 3 | `tab_vlan` | "③ VLANs y Puertos" | `build_tab_vlan()` | VLAN and port configuration |
+| 4 | `tab_routing` | "④ Enrutamiento" | `build_tab_routing()` | Static routes and OSPF |
+| 5 | `tab_qos` | "⑤ QoS MQC" | `build_tab_qos()` | QoS Modular QoS CLI |
+| 6 | `tab_exec` | "⑥ Ejecución" | `build_tab_exec()` | Execute configurations |
+| 7 | `tab_backup` | "⑦ Backup" | `build_tab_backup()` | Backup configs (AWS S3) |
+| 8 | `tab_security` | "⑧ Seguridad" | `build_tab_security()` | Security hardening |
+| 9 | `tab_gre` | "⑨ GRE/IPsec" | `build_tab_gre()` | GRE over IPsec tunnels |
+
+## Module Orchestration
+
+Each tab module receives:
+- `self` (the `SwitchConfiguratorV2` instance) — for accessing/modifying shared state
+- The tab's frame widget — where the module constructs its UI
+
+Tab builder functions store widget references as attributes on `self` (e.g., `self.sw_listbox`, `self.vlan_tree`) to allow cross-tab interactions.
+
+## Example Usage
+
+```python
+import tkinter as tk
+from app import SwitchConfiguratorV2
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SwitchConfiguratorV2(root)
+    root.mainloop()
+```
+
+## Related
+
+- [Widget Factory Functions](/api/widgets) — Reusable styled widgets
+- [Command Builder](/api/command-builder) — IOS command generation
+- [Connector](/api/connector) — SSH connection and L2/L3 detection

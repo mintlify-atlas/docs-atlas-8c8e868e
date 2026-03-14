@@ -1,0 +1,159 @@
+---
+title: 'Branches & DHCP Configuration'
+description: 'Configure branch switches and DHCP pools for network segmentation'
+icon: 'building'
+---
+
+# Branches & DHCP Configuration
+
+This guide covers **Tab ① Branches** and **Tab ② DHCP** — the foundation for managing multiple switch deployments and defining IP address pools.
+
+---
+
+## Tab ① — Branches (Sucursales)
+
+### Overview
+
+The **Branches** tab lets you add, test, and manage Cisco IOSvL2 switches across multiple locations. All configurations defined in subsequent tabs will be applied to the selected branches.
+
+### Connection Policy
+
+<Warning>
+**Protected Resources (Never Modified)**
+- **Uplink interface:** `GigabitEthernet0/0` — management/WAN connectivity preserved
+- **SSH/VTY/crypto keys** — remote access remains intact
+- **Layer detection:** Automatically identifies L2 vs. L3 switches via `show ip route`
+</Warning>
+
+The application auto-detects whether each switch runs `ip routing` (Layer 3) or operates as pure Layer 2. This determines:
+- Whether DHCP pools are configured locally (L3) or delegated to R1 (L2)
+- Whether SVIs receive IP addresses (L3 only)
+- Whether static routes and OSPF are applied (L3 only)
+
+### Adding a Branch
+
+<Steps>
+  <Step title="Fill the branch form">
+    Required fields:
+    - **Name/ID:** Logical identifier (e.g., `SW-CDMX`, `Branch-01`)
+    - **Management IP:** SSH-reachable address (e.g., `192.168.1.10`)
+    - **SSH Username:** Login credential (default: `admin`)
+    - **Password:** User password
+    - **Enable Secret:** Privilege-level password (for `enable` mode)
+  </Step>
+
+  <Step title="Click 'Agregar sucursal'">
+    The switch is added to the in-memory list. You can add multiple branches before testing or deploying.
+  </Step>
+
+  <Step title="Test SSH connectivity">
+    1. Select a branch from the list (Ctrl+click for multiple)
+    2. Click **"Probar conexión"** (Test Connection)
+    3. The app runs:
+       ```python
+       # core/connector.py:test_connection()
+       nc.send_command("show version")
+       nc.send_command("show ip route")
+       ```
+    4. Detection label updates with:
+       - Hostname (`SW-CDMX`)
+       - Layer type (`Layer 3 ✔ (ip routing activo)` or `Layer 2`)
+       - IOS version string
+  </Step>
+</Steps>
+
+**Example output:**
+```
+✔ 'SW-CDMX' | Layer 3 ✔ (ip routing activo) | vios_l2-ADVENTERPRISEK9-M, IOS Experimental 15.2
+```
+
+### Selecting Branches for Deployment
+
+When you click **"Aplicar config"** (Tab ⑥ Execution), the app sends the full command set to **all selected branches** in the listbox. Use Ctrl+click to select multiple switches for bulk deployment.
+
+---
+
+## Tab ② — DHCP Pools
+
+### Overview
+
+Define **DHCP pools** that will be:
+- Configured as local `ip dhcp pool` on **Layer 3 switches**
+- Used to assign IP addresses to **SVIs** (Switch Virtual Interfaces)
+- Linked to VLANs in Tab ③
+
+<Note>
+**Layer 2 Switches:** DHCP must be configured on R1 (router-on-a-stick). The pools defined here are used to set the SVI gateway IP on L3 switches, which then serves as the DHCP server for that VLAN.
+</Note>
+
+### Creating a DHCP Pool
+
+<Steps>
+  <Step title="Enter pool parameters">
+    - **Pool Name:** Logical label (e.g., `VLAN10_POOL`, `DATA_SUBNET`)
+    - **Network:** Base subnet address (e.g., `192.168.10.0`)
+    - **Mask:** Subnet mask (e.g., `255.255.255.0`)
+    - **Gateway / SVI IP:** Default gateway for clients (e.g., `192.168.10.1`)
+      - This IP is **automatically excluded** from the DHCP range
+      - On L3 switches, this becomes the SVI's IP address
+  </Step>
+
+  <Step title="Click 'Agregar Pool'">
+    The pool is added to the list. You can define multiple pools for different VLANs.
+  </Step>
+</Steps>
+
+### Generated IOS Commands (Layer 3 Only)
+
+For each pool, `build_commands()` generates:
+
+```cisco
+ip dhcp excluded-address 192.168.10.1
+ip dhcp pool VLAN10_POOL
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.1
+ dns-server 8.8.8.8
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:118-127`
+
+<Warning>
+The gateway IP is excluded first with `ip dhcp excluded-address` to prevent address conflicts with the SVI.
+</Warning>
+
+### Pool-to-VLAN Linking
+
+After defining pools here, you'll assign them to VLANs in **Tab ③ VLANs y Puertos**. The VLAN's SVI will inherit:
+- The pool's **gateway IP** as its interface address
+- The pool's **network/mask** for subnet routing
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Define your network topology">
+    Add all branch switches with their management IPs and credentials.
+  </Step>
+
+  <Step title="Test connectivity and detect layers">
+    Use **"Probar conexión"** to verify SSH access and auto-detect L2/L3.
+  </Step>
+
+  <Step title="Create DHCP pools">
+    Define IP subnets for each VLAN segment you plan to deploy.
+  </Step>
+
+  <Step title="Proceed to VLAN configuration">
+    Move to Tab ③ to create VLANs and link them to the pools you just defined.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tabs_sw_dhcp.py`
+- SSH Connector: `/home/daytona/workspace/source/core/connector.py`
+- Command Builder: `/home/daytona/workspace/source/core/command_builder.py:118-127`

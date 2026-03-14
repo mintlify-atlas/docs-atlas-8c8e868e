@@ -1,80 +1,350 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Step-by-step guide to configure your first branch with SECURE-BRANCH-lac
 ---
 
-## Get started in three steps
+This guide walks you through configuring your first branch switch, from adding the device to deploying a complete VLAN and DHCP configuration.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+<Check>
+- SECURE-BRANCH-lac is installed and running
+- You have SSH access to at least one Cisco IOSvL2 switch
+- Switch credentials (username and password/enable password)
+- Target switch IP address is reachable
+</Check>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Configuration Workflow
+
+### Step 1: Add Your First Switch
+
+<Steps>
+  <Step title="Navigate to the Branches tab">
+    Click on the **① Sucursales** (Branches) tab in the application.
+  </Step>
+  
+  <Step title="Enter switch details">
+    Fill in the switch information:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    | Field | Example | Description |
+    |-------|---------|-------------|
+    | **Branch Name** | `SW-CDMX` | Friendly name for the branch location |
+    | **IP Address** | `192.168.1.10` | Management IP address of the switch |
+    | **Username** | `admin` | SSH username |
+    | **Password** | `cisco123` | SSH password |
+    | **Enable Password** | `enable123` | Privileged EXEC mode password |
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    <Warning>
+    Credentials are stored in memory only during the session. They are included in exported JSON files but **not saved** when using S3 backup.
+    </Warning>
+  </Step>
+  
+  <Step title="Test SSH connectivity">
+    Click the **Test Connection** button to verify SSH access to the switch.
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    The application will:
+    - Establish an SSH connection using `netmiko`
+    - Automatically detect if the switch is Layer 2 or Layer 3 capable
+    - Display connection status
+    
+    <Tip>
+    The L2/L3 detection ensures appropriate commands are applied. L2-only switches will skip `ip routing` and SVI IP configuration.
+    </Tip>
+  </Step>
+  
+  <Step title="Add the switch to the list">
+    Click **Add Branch** to save the switch to the branches list.
+    
+    The switch will appear in the listbox and be available for selection in the **⑥ Execution** tab.
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+### Step 2: Create a DHCP Pool
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Navigate to the DHCP tab">
+    Click on the **② DHCP** tab.
+  </Step>
+  
+  <Step title="Define pool parameters">
+    Enter the DHCP pool details:
+    
+    | Field | Example | Description |
+    |-------|---------|-------------|
+    | **Pool Name** | `POOL-VLAN10` | Unique identifier for the pool |
+    | **Network** | `10.10.10.0` | Network address |
+    | **Subnet Mask** | `255.255.255.0` | Subnet mask (or use CIDR like `/24`) |
+    | **Default Gateway** | `10.10.10.1` | Gateway IP for clients |
+    | **DNS Server(s)** | `8.8.8.8` | Optional DNS servers (comma-separated) |
+    
+    Example IOS commands generated:
+    ```cisco
+    ip dhcp excluded-address 10.10.10.1
+    ip dhcp pool POOL-VLAN10
+     network 10.10.10.0 255.255.255.0
+     default-router 10.10.10.1
+     dns-server 8.8.8.8
+    ```
+  </Step>
+  
+  <Step title="Add the DHCP pool">
+    Click **Add Pool** to save the DHCP pool configuration.
+    
+    The pool will be available for assignment to VLANs in the next step.
+  </Step>
+</Steps>
 
-### Step 3: Go live
+### Step 3: Configure a VLAN
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+<Steps>
+  <Step title="Navigate to the VLANs and Ports tab">
+    Click on the **③ VLANs y Puertos** (VLANs and Ports) tab.
+  </Step>
+  
+  <Step title="Create a new VLAN">
+    Enter VLAN parameters:
+    
+    | Field | Example | Description |
+    |-------|---------|-------------|
+    | **VLAN ID** | `10` | VLAN number (1-4094) |
+    | **VLAN Name** | `SALES` | Descriptive name |
+    | **SVI IP** | `10.10.10.1` | IP address for the VLAN interface (L3 switches only) |
+    | **SVI Mask** | `255.255.255.0` | Subnet mask for the SVI |
+    | **DHCP Pool** | `POOL-VLAN10` | Select from dropdown (previously created pools) |
+    
+    Example IOS commands generated:
+    ```cisco
+    vlan 10
+     name SALES
+    interface vlan 10
+     ip address 10.10.10.1 255.255.255.0
+     ip helper-address 10.10.10.1
+     no shutdown
+    ```
+    
+    <Note>
+    **L2 Switch Behavior**
+    
+    If the switch is detected as Layer 2 only, the `interface vlan 10` configuration will be skipped automatically, and only the VLAN will be created.
+    </Note>
+  </Step>
+  
+  <Step title="Assign ports to the VLAN">
+    Configure switchport assignments:
+    
+    | Field | Example | Description |
+    |-------|---------|-------------|
+    | **Interface** | `GigabitEthernet0/1` | Physical port identifier |
+    | **Mode** | `access` | `access` (single VLAN) or `trunk` (multiple VLANs) |
+    | **Allowed VLANs** | `10` | For access: VLAN ID; for trunk: comma-separated list |
+    
+    Example IOS commands for access port:
+    ```cisco
+    interface GigabitEthernet0/1
+     switchport mode access
+     switchport access vlan 10
+     no shutdown
+    ```
+    
+    Example IOS commands for trunk port:
+    ```cisco
+    interface GigabitEthernet0/2
+     switchport trunk encapsulation dot1q
+     switchport mode trunk
+     switchport trunk allowed vlan 10,20,30
+     no shutdown
+    ```
+    
+    <Warning>
+    **Protected Interface: GigabitEthernet0/0**
+    
+    The interface `GigabitEthernet0/0` is the management uplink and is **never modified** by SECURE-BRANCH-lac. Attempting to configure this interface will be blocked by the application.
+    </Warning>
+  </Step>
+  
+  <Step title="Add the VLAN configuration">
+    Click **Add VLAN** to save the complete VLAN configuration (VLAN, SVI, ports, DHCP binding).
+  </Step>
+</Steps>
 
-## Next steps
+### Step 4: Execute the Configuration
 
-Now that you have your docs running, explore these key features:
+<Steps>
+  <Step title="Navigate to the Execution tab">
+    Click on the **⑥ Ejecución** (Execution) tab.
+  </Step>
+  
+  <Step title="Select target switches">
+    In the branches listbox, select one or more switches to configure.
+    
+    <Tip>
+    Hold `Ctrl` (Linux/Windows) or `Cmd` (Mac) to select multiple switches for batch deployment.
+    </Tip>
+  </Step>
+  
+  <Step title="Review configuration summary">
+    The execution tab displays a summary of what will be configured:
+    - DHCP pools
+    - VLANs and SVIs
+    - Port assignments
+    - Routing (if configured in tab ④)
+    - QoS policies (if configured in tab ⑤)
+    - Security settings (if configured in tab ⑧)
+    - GRE tunnels (if configured in tab ⑨)
+  </Step>
+  
+  <Step title="Deploy the configuration">
+    Click **Execute Configuration** to begin deployment.
+    
+    The application will:
+    1. Connect to each selected switch via SSH
+    2. Enter configuration mode
+    3. Send generated IOS commands
+    4. Display real-time progress and logging
+    5. Apply **enable secret last** (to prevent SSH disconnection)
+    
+    Monitor the log output for any errors or warnings.
+    
+    <Note>
+    **Configuration Order**
+    
+    Commands are applied in a safe sequence:
+    1. DHCP pools and excluded addresses
+    2. VLANs and VLAN names
+    3. SVIs with IP addresses (L3 switches only)
+    4. Switchport configurations
+    5. Routing (static routes, OSPF)
+    6. QoS policies
+    7. Security settings (enable secret applied **last**)
+    </Note>
+  </Step>
+  
+  <Step title="Verify deployment success">
+    After execution completes:
+    - Review the log for any error messages
+    - SSH to the switch manually and verify with:
+    
+    ```cisco
+    show vlan brief
+    show ip dhcp pool
+    show ip interface brief
+    show running-config
+    ```
+  </Step>
+</Steps>
+
+## Example: Complete Branch Configuration
+
+Here's a complete example configuration for a branch switch:
+
+<CodeGroup>
+```plaintext Branch Details
+Branch Name: SW-CDMX
+IP Address: 192.168.1.10
+Username: admin
+Password: cisco123
+Enable Password: enable123
+```
+
+```plaintext DHCP Pool
+Pool Name: POOL-VLAN10
+Network: 10.10.10.0
+Mask: 255.255.255.0
+Gateway: 10.10.10.1
+DNS: 8.8.8.8
+```
+
+```plaintext VLAN Configuration
+VLAN ID: 10
+VLAN Name: SALES
+SVI IP: 10.10.10.1
+SVI Mask: 255.255.255.0
+DHCP Pool: POOL-VLAN10
+
+Access Port: GigabitEthernet0/1 → VLAN 10
+Access Port: GigabitEthernet0/2 → VLAN 10
+```
+
+```cisco Generated IOS Commands
+! DHCP Configuration
+ip dhcp excluded-address 10.10.10.1
+ip dhcp pool POOL-VLAN10
+ network 10.10.10.0 255.255.255.0
+ default-router 10.10.10.1
+ dns-server 8.8.8.8
+
+! VLAN Configuration
+vlan 10
+ name SALES
+
+interface vlan 10
+ ip address 10.10.10.1 255.255.255.0
+ ip helper-address 10.10.10.1
+ no shutdown
+
+! Port Configurations
+interface GigabitEthernet0/1
+ switchport mode access
+ switchport access vlan 10
+ no shutdown
+
+interface GigabitEthernet0/2
+ switchport mode access
+ switchport access vlan 10
+ no shutdown
+```
+</CodeGroup>
+
+## Next Steps
+
+Now that you've configured your first branch, explore advanced features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Routing Configuration" icon="route" href="/guides/routing">
+    Add static routes, default gateways, and OSPF dynamic routing
+  </Card>
+  
+  <Card title="QoS Policies" icon="gauge" href="/guides/qos">
+    Configure Quality of Service with class-maps, policy-maps, and DSCP markings
+  </Card>
+  
+  <Card title="Security Hardening" icon="shield" href="/guides/security">
+    Enable secret passwords, login blocking, and MOTD banners
+  </Card>
+  
+  <Card title="Backup & Restore" icon="cloud-arrow-up" href="/operations/backup-s3">
+    Export configurations to JSON or upload running-config to AWS S3
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="SSH connection failed">
+    Verify:
+    - Switch IP address is reachable (`ping 192.168.1.10`)
+    - SSH is enabled on the switch (`show ip ssh`)
+    - Credentials are correct
+    - Firewall rules allow SSH (port 22)
+  </Accordion>
+  
+  <Accordion title="VLAN configuration not applied">
+    Check:
+    - Switch is not Layer 2 only (if configuring SVIs)
+    - VLAN ID is valid (1-4094, avoid reserved VLANs like 1002-1005)
+    - No conflicting VLAN configuration exists
+    - Review execution log for specific error messages
+  </Accordion>
+  
+  <Accordion title="DHCP pool not working">
+    Verify:
+    - DHCP service is enabled on the switch
+    - `ip helper-address` is configured on the SVI
+    - Excluded addresses don't overlap with the pool range
+    - Gateway IP is within the network range
+  </Accordion>
+  
+  <Accordion title="GigabitEthernet0/0 modification blocked">
+    This is expected behavior. `GigabitEthernet0/0` is the management uplink and is protected from modification to prevent loss of connectivity. Use other interfaces for branch configurations.
+  </Accordion>
+</AccordionGroup>

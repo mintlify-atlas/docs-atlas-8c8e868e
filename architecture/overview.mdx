@@ -1,0 +1,283 @@
+---
+title: 'Architecture Overview'
+description: 'High-level architecture of SECURE-BRANCH-lac, including module separation, state management, and design principles'
+---
+
+## Overview
+
+SECURE-BRANCH-lac is a Tkinter-based GUI application for mass configuration of Cisco IOSvL2 switches across multiple branch offices. The application follows a clean separation between business logic and presentation layers.
+
+**Target Firmware:** `vios_l2-ADVENTERPRISEK9-M`, IOS Experimental 15.2(20200924:215240)
+
+**Current Version:** v2.2
+
+## Architectural Principles
+
+### Separation of Concerns
+
+The application is structured around two primary directories:
+
+<Accordion title="core/ — Business Logic (Tkinter-independent)">
+  Contains all network configuration logic without any GUI dependencies:
+  
+  - **command_builder.py** — Generates IOS commands from configuration data
+  - **connector.py** — Handles SSH connections, Layer detection, and command execution
+  
+  This separation allows:
+  - Unit testing of business logic without GUI
+  - Reuse of core modules in CLI scripts
+  - Easier maintenance and debugging
+  
+  ```python
+  # source/core/command_builder.py:3-9
+  """
+  Convierte la configuración definida en la GUI (VLANs, DHCP, rutas, QoS)
+  en listas de comandos IOS listos para enviarse al switch.
+  
+  No depende de tkinter; es pura lógica de negocio.
+  Esto facilita probar la generación de comandos sin abrir la interfaz gráfica.
+  """
+  ```
+</Accordion>
+
+<Accordion title="ui/ — Presentation Layer">
+  Contains all Tkinter-based GUI components organized by functionality:
+  
+  - **widgets.py** — Styled widget factory (buttons, entries, labels)
+  - **tabs_sw_dhcp.py** — Branch and DHCP pool management tabs
+  - **tab_vlan.py** — VLAN and port assignment tab
+  - **tab_routing.py** — Static routes and OSPF configuration
+  - **tab_qos.py** — QoS MQC (class-map, policy-map, service-policy)
+  - **tab_exec_backup.py** — Execution and backup (local + AWS S3)
+  - **tab_security_gre.py** — Security hardening and GRE over IPsec tunnels
+</Accordion>
+
+### Entry Point and Orchestration
+
+The main application class orchestrates all tabs and maintains global state:
+
+```python
+# source/app.py:47-62
+class SwitchConfiguratorV2:
+    """
+    Clase principal que agrupa el estado global y construye la ventana.
+
+    Estado global (listas de dicts en memoria):
+      sucursales      : switches que la app puede configurar
+      dhcp_pools      : pools DHCP definidos
+      vlans_data      : VLANs con sus puertos, DHCP y ACLs
+      static_routes   : rutas estáticas
+      ospf_networks   : redes a anunciar por OSPF
+      qos_classes     : class-maps de QoS
+      pol_entries     : entradas de la policy-map
+      service_policies: aplicaciones de service-policy a interfaces
+      gre_tunnels     : configuraciones de túneles GRE over IPsec (v2.2)
+      detected_l3     : último resultado de detección L2/L3 (puede ser None)
+    """
+```
+
+## State Management
+
+All configuration state is stored as lists of dictionaries in the `SwitchConfiguratorV2` instance:
+
+<CodeGroup>
+```python Switch Inventory
+# source/app.py:75
+self.sucursales = []  # [{name, ip, user, pass, secret}, ...]
+```
+
+```python Network Configuration
+# source/app.py:76-79
+self.dhcp_pools    = []  # [{name, net, mask, gw}, ...]
+self.vlans_data    = []  # [{id, name, ports, dhcp_idx, ...}, ...]
+self.static_routes = []  # [{dest, mask, nexthop}, ...]
+self.ospf_networks = []  # [{network, wildcard, area}, ...]
+```
+
+```python QoS and Security
+# source/app.py:80-84
+self.qos_classes      = []  # [{name, match_type, criteria, value}, ...]
+self.pol_entries      = []  # [{class, action, value}, ...]
+self.service_policies = []  # [{iface, dir, policy}, ...]
+self.gre_tunnels      = []  # [{tunnel_id, src_ip, dst_ip, ...}, ...]
+self.detected_l3      = None  # True=L3 / False=L2 / None=no detectado
+```
+</CodeGroup>
+
+### State Flow
+
+1. **User Input** → GUI tabs populate state lists via event handlers
+2. **Validation** → Each tab validates inputs before adding to state
+3. **Configuration Generation** → `command_builder.py` consumes state to generate IOS commands
+4. **Execution** → `connector.py` sends commands via SSH (Netmiko)
+5. **Persistence** → Export/import JSON (Backup tab) for session recovery
+
+## Tab Structure and Navigation
+
+The application uses a tabbed interface with numbered tabs for sequential workflow:
+
+| # | Tab | Responsibility | State Modified |
+|---|-----|----------------|----------------|
+| ① | Sucursales | Switch inventory and SSH testing | `sucursales` |
+| ② | DHCP | DHCP pool definitions | `dhcp_pools` |
+| ③ | VLANs y Puertos | VLAN creation and port assignment | `vlans_data` |
+| ④ | Enrutamiento | Static routes and OSPF | `static_routes`, `ospf_networks` |
+| ⑤ | QoS MQC | Class-maps and policy-maps | `qos_classes`, `pol_entries`, `service_policies` |
+| ⑥ | Ejecución | Deploy configuration to selected switches | (reads all state) |
+| ⑦ | Backup | Export/import JSON, download running-config, AWS S3 upload | (reads all state) |
+| ⑧ | Seguridad | Enable secret, login blocking, banner MOTD | (added to config params) |
+| ⑨ | GRE/IPsec | GRE over IPsec tunnels | `gre_tunnels` |
+
+```python
+# source/app.py:92-102
+tabs = [
+    ("tab_sw",       "① Sucursales"),
+    ("tab_dhcp",     "② DHCP"),
+    ("tab_vlan",     "③ VLANs y Puertos"),
+    ("tab_routing",  "④ Enrutamiento"),
+    ("tab_qos",      "⑤ QoS MQC"),
+    ("tab_exec",     "⑥ Ejecución"),
+    ("tab_backup",   "⑦ Backup"),
+    ("tab_security", "⑧ Seguridad"),
+    ("tab_gre",      "⑨ GRE/IPsec"),
+]
+```
+
+## Configuration Workflow
+
+<Steps>
+  <Step title="Define Infrastructure">
+    Add switches with IP addresses and credentials (Tab ①)
+    
+    Test SSH connectivity to verify access
+  </Step>
+  
+  <Step title="Configure Network Services">
+    Create DHCP pools (Tab ②)
+    
+    Define VLANs and assign ports (Tab ③)
+    
+    Configure routing (static routes, OSPF) (Tab ④)
+  </Step>
+  
+  <Step title="Apply Policies">
+    Configure QoS policies for traffic shaping (Tab ⑤)
+    
+    Set security policies (enable secret, login blocking) (Tab ⑧)
+    
+    Create GRE over IPsec tunnels if needed (Tab ⑨)
+  </Step>
+  
+  <Step title="Execute and Backup">
+    Select target switches and deploy configuration (Tab ⑥)
+    
+    Export configuration as JSON or upload to AWS S3 (Tab ⑦)
+  </Step>
+</Steps>
+
+## Design Patterns
+
+### Factory Pattern for Widgets
+
+Standardized widget creation through `widgets.py` ensures visual consistency:
+
+```python
+# source/app.py:38
+from ui.widgets import apply_style
+
+# source/app.py:72
+apply_style(root)  # Applies global theme (colors, fonts, borders)
+```
+
+### Builder Pattern for Commands
+
+Commands are built incrementally based on configuration state:
+
+```python
+# source/core/command_builder.py:53-103
+def build_commands(
+    is_l3: bool,
+    chk_intervlan: bool,
+    dhcp_pools: list,
+    vlans_data: list,
+    static_routes: list,
+    # ... (20+ parameters)
+) -> list:
+    """Genera la lista completa de comandos IOS"""
+```
+
+### Strategy Pattern for Layer Detection
+
+Different configuration strategies for Layer 2 vs Layer 3 switches:
+
+```python
+# source/core/connector.py:50-69
+def detect_l3(nc) -> bool:
+    """
+    Detecta si el switch tiene ip routing activo (Layer 3) o no (Layer 2).
+    
+    Estrategia: ejecuta 'show ip route connected' y busca líneas que comiencen
+    con 'C' (ruta directamente conectada). Si las hay, el switch enruta.
+    """
+```
+
+## Error Handling and Resilience
+
+### Per-Command Error Recovery
+
+Commands are sent individually with adaptive delays and error recovery:
+
+```python
+# source/core/connector.py:72-127
+def send_cmd_by_cmd(nc, commands: list, log_fn=None):
+    """
+    Envía una lista de comandos IOS al switch de forma individual,
+    con esperas adaptativas y manejo de errores por comando.
+    
+    Por qué comando a comando y no config_mode + send_config_set?
+    → Algunos comandos (OSPF, ip route) recalculan la tabla de routing
+      y necesitan más tiempo. Este método ajusta el delay por comando.
+    """
+```
+
+### Protected Resources
+
+The application never modifies critical infrastructure:
+
+<CardGroup cols={2}>
+  <Card title="Protected Interface" icon="shield">
+    `GigabitEthernet0/0` — Management uplink (defined in `constants.py:UPLINK_IFACE`)
+  </Card>
+  
+  <Card title="Protected Services" icon="lock">
+    SSH, VTY lines, crypto keys — Remote access configuration
+  </Card>
+  
+  <Card title="Protected Routes" icon="route">
+    Pre-existing static routes and OSPF networks not configured by the app
+  </Card>
+  
+  <Card title="Protected VLAN" icon="network-wired">
+    VLAN 1 — Native management VLAN
+  </Card>
+</CardGroup>
+
+## Dependencies
+
+| Package | Purpose | Installation |
+|---------|---------|-------------|
+| `tkinter` | GUI framework | Included in Python standard library |
+| `netmiko` | SSH connection to Cisco devices | `pip install netmiko --break-system-packages` |
+| `boto3` | AWS S3 backup (optional) | `pip install boto3 --break-system-packages` |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Project Structure" icon="folder-tree" href="/architecture/project-structure">
+    Detailed file structure and module responsibilities
+  </Card>
+  
+  <Card title="Layer 2 vs Layer 3" icon="layer-group" href="/architecture/layer2-vs-layer3">
+    Detection strategy and configuration differences
+  </Card>
+</CardGroup>

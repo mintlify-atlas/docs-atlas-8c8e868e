@@ -1,0 +1,394 @@
+---
+title: 'constants'
+description: 'Global constants — application version, UI colors, protected interfaces, and QoS presets'
+icon: 'sliders'
+---
+
+## Overview
+
+The `constants` module centralizes all application-wide constants including version metadata, UI theme colors, protected network interfaces, and QoS DSCP presets. Modify this file to change the visual theme or default configuration values.
+
+**Module Path:** `constants.py`
+
+---
+
+## Version and Metadata
+
+### APP_VERSION
+
+Application version string displayed in the UI title bar.
+
+```python
+APP_VERSION = "v2.2  |  IOSvL2 15.2 / GRE-IPsec / S3 Backup"
+```
+
+<ResponseField name="APP_VERSION" type="str">
+  Current version: `"v2.2  |  IOSvL2 15.2 / GRE-IPsec / S3 Backup"`
+</ResponseField>
+
+#### Version History
+
+- **v2.2** — Added GRE over IPsec tunnels and S3 backup integration
+- **v2.1** — Enhanced security features (login blocking, banner MOTD)
+- **v2.0** — Full Layer 2/3 auto-detection and QoS support
+
+#### Example
+
+```python
+from constants import APP_VERSION
+
+print(f"SecureBranch {APP_VERSION}")
+# Output: SecureBranch v2.2  |  IOSvL2 15.2 / GRE-IPsec / S3 Backup
+```
+
+---
+
+## Protected Network Resources
+
+### UPLINK_IFACE
+
+Management/uplink interface that must **NEVER** be modified by the application.
+
+```python
+UPLINK_IFACE = "GigabitEthernet0/0"
+```
+
+<ResponseField name="UPLINK_IFACE" type="str">
+  Protected interface: `"GigabitEthernet0/0"`
+</ResponseField>
+
+#### Why This Matters
+
+This interface connects the switch to the router/core network. Modifying it could:
+- Break SSH access to the switch
+- Disconnect the switch from the network
+- Require console access to recover
+
+#### Protection Mechanisms
+
+The cleanup function `build_cleanup_commands()` checks every interface against `UPLINK_IFACE` and skips:
+- Port mode changes (access/trunk)
+- VLAN assignments
+- Service-policy associations
+- Any configuration modifications
+
+#### Example
+
+```python
+from constants import UPLINK_IFACE
+
+def is_protected_interface(iface: str) -> bool:
+    """Check if interface should never be modified."""
+    return UPLINK_IFACE.lower() in iface.lower()
+
+# Usage in cleanup logic
+if is_protected_interface("GigabitEthernet0/0"):
+    print("Skipping uplink — protected interface")
+    # Skip this interface during cleanup
+```
+
+---
+
+## QoS Configuration
+
+### DSCP_PRESETS
+
+Predefined DSCP (Differentiated Services Code Point) values for QoS quick buttons.
+
+```python
+DSCP_PRESETS = [
+    ("EF  — Voz/Video (46)",          "ef"),
+    ("AF41 — Video conferencia (34)", "af41"),
+    ("AF31 — Llamadas (26)",          "af31"),
+    ("AF21 — Datos críticos (18)",    "af21"),
+    ("AF11 — Datos normales (10)",    "af11"),
+    ("CS3  — Señalización (24)",      "cs3"),
+    ("CS1  — Scavenger (8)",          "cs1"),
+    ("Default — Best effort (0)",     "default"),
+]
+```
+
+<ResponseField name="DSCP_PRESETS" type="list[tuple[str, str]]">
+  List of tuples: `(display_label, ios_value)`
+</ResponseField>
+
+#### DSCP Value Reference
+
+| Label | IOS Value | Decimal | Binary | Use Case |
+|-------|-----------|---------|--------|----------|
+| **EF** | `ef` | 46 | `101110` | Voice/video (low latency, low jitter) |
+| **AF41** | `af41` | 34 | `100010` | Video conferencing |
+| **AF31** | `af31` | 26 | `011010` | Voice calls |
+| **AF21** | `af21` | 18 | `010010` | Critical data (database, ERP) |
+| **AF11** | `af11` | 10 | `001010` | Normal business data |
+| **CS3** | `cs3` | 24 | `011000` | Call signaling (SIP, H.323) |
+| **CS1** | `cs1` | 8 | `001000` | Scavenger (bulk downloads, P2P) |
+| **Default** | `default` | 0 | `000000` | Best effort (no priority) |
+
+#### DSCP Naming Conventions
+
+- **EF** = Expedited Forwarding → Highest priority, guaranteed low latency
+- **AFxy** = Assured Forwarding → Class `x` (1-4), Drop precedence `y` (1-3)
+- **CSx** = Class Selector → Backward compatible with IP Precedence
+- **Default** = Best Effort → No QoS guarantees
+
+#### Example
+
+```python
+from constants import DSCP_PRESETS
+
+# Display preset options in GUI
+for label, value in DSCP_PRESETS:
+    print(f"{label} → IOS command: match dscp {value}")
+
+# Output:
+# EF  — Voz/Video (46) → IOS command: match dscp ef
+# AF41 — Video conferencia (34) → IOS command: match dscp af41
+# ...
+
+# Get IOS value for voice traffic
+voice_dscp = next(val for lbl, val in DSCP_PRESETS if "Voz" in lbl)
+print(f"Voice DSCP: {voice_dscp}")  # Output: Voice DSCP: ef
+```
+
+---
+
+## UI Theme Colors
+
+Dark theme color palette inspired by GitHub Dark.
+
+### Background Colors
+
+```python
+BG  = "#0d1117"  # Main background
+BG2 = "#161b22"  # Panel background
+BG3 = "#21262d"  # Input field background
+```
+
+<ResponseField name="BG" type="str">
+  Main window background: `#0d1117` (very dark gray)
+</ResponseField>
+
+<ResponseField name="BG2" type="str">
+  Panel/frame background: `#161b22` (dark gray)
+</ResponseField>
+
+<ResponseField name="BG3" type="str">
+  Input field background: `#21262d` (medium dark gray)
+</ResponseField>
+
+### Accent Colors
+
+```python
+ACCENT  = "#58a6ff"  # Blue for emphasis
+ACCENT2 = "#f78166"  # Orange/red for action buttons
+```
+
+<ResponseField name="ACCENT" type="str">
+  Primary accent (blue): `#58a6ff` — Links, highlights, primary buttons
+</ResponseField>
+
+<ResponseField name="ACCENT2" type="str">
+  Secondary accent (orange): `#f78166` — Warning buttons, destructive actions
+</ResponseField>
+
+### Status Colors
+
+```python
+SUCCESS = "#3fb950"  # Green for success messages
+WARN    = "#d29922"  # Yellow for warnings
+```
+
+<ResponseField name="SUCCESS" type="str">
+  Success indicator (green): `#3fb950`
+</ResponseField>
+
+<ResponseField name="WARN" type="str">
+  Warning indicator (yellow): `#d29922`
+</ResponseField>
+
+### Text Colors
+
+```python
+TEXT  = "#c9d1d9"  # Main text
+TEXT2 = "#8b949e"  # Secondary text (muted)
+```
+
+<ResponseField name="TEXT" type="str">
+  Primary text: `#c9d1d9` (light gray)
+</ResponseField>
+
+<ResponseField name="TEXT2" type="str">
+  Secondary text: `#8b949e` (muted gray)
+</ResponseField>
+
+### Border Color
+
+```python
+BORDER = "#30363d"  # Widget borders
+```
+
+<ResponseField name="BORDER" type="str">
+  Border color: `#30363d` (subtle gray)
+</ResponseField>
+
+---
+
+## Usage Examples
+
+### Using Colors in Tkinter
+
+```python
+import tkinter as tk
+from constants import BG, BG2, ACCENT, TEXT, BORDER
+
+root = tk.Tk()
+root.configure(bg=BG)
+
+# Create styled button
+btn = tk.Button(
+    root,
+    text="Aplicar",
+    bg=ACCENT,
+    fg=BG,
+    activebackground=ACCENT,
+    bd=0,
+    font=("Arial", 12, "bold"),
+)
+
+# Create styled frame
+frame = tk.Frame(
+    root,
+    bg=BG2,
+    highlightbackground=BORDER,
+    highlightthickness=1,
+)
+
+# Create styled label
+label = tk.Label(
+    frame,
+    text="SecureBranch",
+    bg=BG2,
+    fg=TEXT,
+    font=("Arial", 14),
+)
+```
+
+### Checking Protected Interface
+
+```python
+from constants import UPLINK_IFACE
+import re
+
+def parse_interfaces(config: str) -> list:
+    """Extract all interfaces except uplink."""
+    interfaces = []
+    for iface in re.findall(r'^interface (\S+)', config, re.MULTILINE):
+        if UPLINK_IFACE.lower() not in iface.lower():
+            interfaces.append(iface)
+    return interfaces
+
+# Example
+config = """
+interface GigabitEthernet0/0
+ ip address 192.168.1.10 255.255.255.0
+interface GigabitEthernet0/1
+ switchport mode access
+interface GigabitEthernet0/2
+ switchport mode trunk
+"""
+
+ifaces = parse_interfaces(config)
+print(ifaces)  # ['GigabitEthernet0/1', 'GigabitEthernet0/2']
+# GigabitEthernet0/0 (uplink) is excluded
+```
+
+### Building QoS Class-Map from Preset
+
+```python
+from constants import DSCP_PRESETS
+
+def create_voice_qos_commands() -> list:
+    """Generate QoS commands for voice traffic."""
+    # Find EF (voice) preset
+    ef_value = next(val for lbl, val in DSCP_PRESETS if "Voz" in lbl)
+    
+    return [
+        "class-map match-all VOICE",
+        f"match dscp {ef_value}",
+        "exit",
+        "policy-map QOS-POLICY",
+        "class VOICE",
+        "priority percent 30",
+        "exit",
+        "exit",
+    ]
+
+cmds = create_voice_qos_commands()
+for cmd in cmds:
+    print(cmd)
+
+# Output:
+# class-map match-all VOICE
+# match dscp ef
+# exit
+# policy-map QOS-POLICY
+# class VOICE
+# priority percent 30
+# exit
+# exit
+```
+
+---
+
+## Customization Guide
+
+### Changing UI Colors
+
+To switch to a light theme:
+
+```python
+# Light theme example
+BG      = "#ffffff"  # White background
+BG2     = "#f6f8fa"  # Light gray panels
+BG3     = "#ffffff"  # White inputs
+ACCENT  = "#0969da"  # Darker blue
+ACCENT2 = "#cf222e"  # Red accent
+SUCCESS = "#1a7f37"  # Darker green
+WARN    = "#9a6700"  # Darker yellow
+TEXT    = "#24292f"  # Dark gray text
+TEXT2   = "#57606a"  # Medium gray text
+BORDER  = "#d0d7de"  # Light border
+```
+
+### Changing Protected Interface
+
+If your uplink uses a different interface:
+
+```python
+# Example: Protecting a 10G uplink
+UPLINK_IFACE = "TenGigabitEthernet1/0/1"
+
+# Example: Protecting a port-channel
+UPLINK_IFACE = "Port-channel1"
+```
+
+### Adding Custom DSCP Presets
+
+```python
+DSCP_PRESETS = [
+    ("EF  — Voz/Video (46)",          "ef"),
+    ("AF41 — Video conferencia (34)", "af41"),
+    # Add custom preset
+    ("CS6  — Network control (48)",   "cs6"),
+    ("AF43 — High video (38)",        "af43"),
+    # ... rest of presets
+]
+```
+
+---
+
+## See Also
+
+- [command_builder](/api/command-builder) — Uses `UPLINK_IFACE` and `DSCP_PRESETS`
+- [connector](/api/connector) — Uses `UPLINK_IFACE` for interface protection

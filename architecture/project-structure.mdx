@@ -1,0 +1,474 @@
+---
+title: 'Project Structure'
+description: 'Detailed file structure, module responsibilities, and code organization of SECURE-BRANCH-lac'
+---
+
+## Directory Layout
+
+```
+SECURE-BRANCH-lac/
+│
+├── app.py                   # Punto de entrada + clase principal (SwitchConfiguratorV2)
+├── constants.py             # Colores, versión, UPLINK_IFACE, DSCP_PRESETS
+│
+├── core/                    # Lógica de negocio — sin dependencias de Tkinter
+│   ├── command_builder.py   # Genera comandos IOS (DHCP, VLANs, ACLs, OSPF, QoS,
+│   │                        #   Seguridad, GRE over IPsec)
+│   └── connector.py         # Conexión SSH, detección L2/L3, envío de comandos
+│
+└── ui/                      # Interfaz gráfica Tkinter
+    ├── widgets.py            # Fábrica de widgets estilizados (botones, entries, etc.)
+    ├── tabs_sw_dhcp.py       # Pestañas ① Sucursales y ② DHCP
+    ├── tab_vlan.py           # Pestaña ③ VLANs y Puertos
+    ├── tab_routing.py        # Pestaña ④ Enrutamiento (rutas + OSPF)
+    ├── tab_qos.py            # Pestaña ⑤ QoS MQC (class-map, policy-map, service-policy)
+    ├── tab_exec_backup.py    # Pestañas ⑥ Ejecución y ⑦ Backup (local + AWS S3)
+    └── tab_security_gre.py   # Pestañas ⑧ Seguridad y ⑨ GRE over IPsec
+```
+
+## Root Level Files
+
+### app.py — Application Entry Point
+
+**Location:** `/source/app.py` (127 lines)
+
+**Responsibilities:**
+- Initialize Tkinter root window
+- Create `SwitchConfiguratorV2` class instance
+- Build tab structure and navigation
+- Maintain global application state
+- Orchestrate all UI modules
+
+<Accordion title="Key Code: Main Class Definition">
+```python
+# source/app.py:47-84
+class SwitchConfiguratorV2:
+    """
+    Clase principal que agrupa el estado global y construye la ventana.
+
+    Estado global (listas de dicts en memoria):
+      sucursales      : switches que la app puede configurar
+      dhcp_pools      : pools DHCP definidos
+      vlans_data      : VLANs con sus puertos, DHCP y ACLs
+      static_routes   : rutas estáticas
+      ospf_networks   : redes a anunciar por OSPF
+      qos_classes     : class-maps de QoS
+      pol_entries     : entradas de la policy-map
+      service_policies: aplicaciones de service-policy a interfaces
+      gre_tunnels     : configuraciones de túneles GRE over IPsec (v2.2)
+      detected_l3     : último resultado de detección L2/L3 (puede ser None)
+    """
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title(f"Configurador IOSvL2 — {APP_VERSION}")
+        self.root.geometry("980x800")
+        self.root.configure(bg="#0d1117")
+        self.root.resizable(True, True)
+
+        # Aplicar tema visual global (colores, fuentes, bordes)
+        apply_style(root)
+
+        # ── Estado global ──────────────────────────────────────────────────────
+        self.sucursales       = []
+        self.dhcp_pools       = []
+        self.vlans_data       = []
+        self.static_routes    = []
+        self.ospf_networks    = []
+        self.qos_classes      = []
+        self.pol_entries      = []
+        self.service_policies = []
+        self.gre_tunnels      = []   # túneles GRE over IPsec (v2.2)
+        self.detected_l3      = None  # True=L3 / False=L2 / None=no detectado aún
+```
+</Accordion>
+
+<Accordion title="Key Code: Tab Construction">
+```python
+# source/app.py:108-119
+# Cada función recibe 'self' (app) y el frame de la pestaña.
+# Los widgets se guardan como atributos de 'self' (ej: self.sw_listbox).
+build_tab_sw(self,       self.tab_sw)
+build_tab_dhcp(self,     self.tab_dhcp)
+build_tab_vlan(self,     self.tab_vlan)
+build_tab_routing(self,  self.tab_routing)
+build_tab_qos(self,      self.tab_qos)
+build_tab_exec(self,     self.tab_exec)
+build_tab_backup(self,   self.tab_backup)
+build_tab_security(self, self.tab_security)
+build_tab_gre(self,      self.tab_gre)
+```
+</Accordion>
+
+**Execution:**
+```bash
+cd SECURE-BRANCH-lac
+source env/bin/activate
+python app.py
+```
+
+### constants.py — Global Constants
+
+**Location:** `/source/constants.py`
+
+**Responsibilities:**
+- Application version (`APP_VERSION = "v2.2"`)
+- Color scheme for dark theme
+- Protected interface name (`UPLINK_IFACE = "GigabitEthernet0/0"`)
+- DSCP presets for QoS configuration
+
+## core/ Directory — Business Logic
+
+### command_builder.py — IOS Command Generator
+
+**Location:** `/source/core/command_builder.py` (393 lines)
+
+**Responsibilities:**
+- Generate IOS commands from configuration data
+- Build DHCP pool configurations
+- Create VLAN and port assignments
+- Generate routing commands (static routes, OSPF)
+- Build QoS policies (class-map, policy-map, service-policy)
+- Create security configurations (enable secret, login blocking, banner)
+- Generate GRE over IPsec tunnel configurations
+- Build cleanup commands (selective removal of app-configured items)
+
+<Accordion title="Key Function: expand_ports()">
+```python
+# source/core/command_builder.py:19-50
+def expand_ports(ports_str: str) -> str:
+    """
+    Normaliza nombres de interfaces a la forma completa que espera IOS 15.x.
+
+    Acepta notación corta o larga:
+      - "Gi0/1-3"     → "GigabitEthernet0/1-3"
+      - "Gi0/1,Gi0/3" → "GigabitEthernet0/1, GigabitEthernet0/3"
+      - "Fa0/2"       → "FastEthernet0/2"
+
+    IOS acepta 'interface range' con nombre completo; la forma corta 'Gi' a veces
+    genera errores según la versión del firmware, por eso normalizamos aquí.
+    """
+```
+</Accordion>
+
+<Accordion title="Key Function: build_commands()">
+```python
+# source/core/command_builder.py:53-103
+def build_commands(
+    is_l3: bool,
+    chk_intervlan: bool,
+    dhcp_pools: list,
+    vlans_data: list,
+    static_routes: list,
+    chk_ospf: bool,
+    ospf_pid: str,
+    ospf_networks: list,
+    qos_classes: list,
+    pol_entries: list,
+    pol_name: str,
+    service_policies: list,
+    # ── Nuevos parámetros v2.2 ────────────────────────────────────────────────
+    enable_pw: str          = "",    # enable secret (MD5 type-5)
+    login_attempts: str     = "",    # máx intentos fallidos antes de bloquear
+    login_window: str       = "",    # ventana en seg para contar intentos
+    login_block_for: str    = "",    # seg de bloqueo al superar intentos
+    banner_text: str        = "",    # texto banner MOTD
+    gre_tunnels: list       = None,  # lista de dicts con config GRE over IPsec
+    log_fn=None,
+) -> list:
+    """
+    Genera la lista completa de comandos IOS en modo configuración global.
+    
+    Retorna: list de comandos IOS en orden correcto para enviar al switch.
+    """
+```
+</Accordion>
+
+**Command Generation Flow:**
+
+<Steps>
+  <Step title="Routing Configuration">
+    Enable `ip routing` and `service dhcp` (Layer 3 only)
+  </Step>
+  
+  <Step title="DHCP Pools">
+    Configure DHCP pools with exclusions (Layer 3 only)
+  </Step>
+  
+  <Step title="VLANs and Ports">
+    Create VLANs and assign ports (access/trunk)
+  </Step>
+  
+  <Step title="ACLs">
+    Generate extended ACLs for security policies
+  </Step>
+  
+  <Step title="SVIs">
+    Configure Switch Virtual Interfaces with IPs (Layer 3 only)
+  </Step>
+  
+  <Step title="Static Routes and OSPF">
+    Add static routes and OSPF network statements
+  </Step>
+  
+  <Step title="QoS">
+    Build class-maps, policy-maps, and service-policy assignments
+  </Step>
+  
+  <Step title="Security">
+    Apply enable secret, login blocking, and banner MOTD
+  </Step>
+  
+  <Step title="GRE over IPsec">
+    Configure tunnel interfaces and IPsec policies
+  </Step>
+</Steps>
+
+<Accordion title="Key Function: build_cleanup_commands()">
+```python
+# source/core/command_builder.py:289-392
+def build_cleanup_commands(nc, static_routes: list, ospf_networks: list, log_fn=None) -> list:
+    """
+    Lee el running-config del switch y genera comandos 'no ...' para limpiar
+    únicamente lo que esta aplicación puede haber configurado previamente.
+
+    Protege:
+      - SSH, usuarios, VTY, crypto key (acceso remoto)
+      - Interfaz de uplink (UPLINK_IFACE)
+      - Rutas estáticas y redes OSPF que NO fueron configuradas por esta app
+      - VLAN 1 (nativa, no se borra)
+    """
+```
+</Accordion>
+
+### connector.py — SSH Connection Manager
+
+**Location:** `/source/core/connector.py` (272 lines)
+
+**Responsibilities:**
+- Establish SSH connections via Netmiko
+- Detect Layer 2 vs Layer 3 capability
+- Send commands with adaptive delays
+- Handle connection errors and timeouts
+- Download running-config (backup)
+- Test connectivity and retrieve device info
+
+<Accordion title="Key Function: make_device_params()">
+```python
+# source/core/connector.py:26-47
+def make_device_params(sw: dict) -> dict:
+    """
+    Construye el diccionario de parámetros que Netmiko necesita para conectarse.
+    """
+    return {
+        'device_type':           'cisco_ios',
+        'host':                  sw['ip'],
+        'username':              sw['user'],
+        'password':              sw['pass'],
+        'secret':                sw['secret'],
+        'global_delay_factor':   2,
+        'read_timeout_override': 60,
+        'fast_cli':              True,
+    }
+```
+</Accordion>
+
+<Accordion title="Key Function: detect_l3()">
+```python
+# source/core/connector.py:50-69
+def detect_l3(nc) -> bool:
+    """
+    Detecta si el switch tiene ip routing activo (Layer 3) o no (Layer 2).
+
+    Estrategia: ejecuta 'show ip route connected' y busca líneas que comiencen
+    con 'C' (ruta directamente conectada). Si las hay, el switch enruta.
+    """
+    try:
+        out = nc.send_command("show ip route connected", delay_factor=2)
+        return bool(re.search(r'^C\s+', out, re.MULTILINE))
+    except Exception:
+        return False   # Si falla, asumimos L2 por seguridad
+```
+</Accordion>
+
+<Accordion title="Key Function: send_cmd_by_cmd()">
+```python
+# source/core/connector.py:72-127
+def send_cmd_by_cmd(nc, commands: list, log_fn=None):
+    """
+    Envía una lista de comandos IOS al switch de forma individual,
+    con esperas adaptativas y manejo de errores por comando.
+
+    Por qué comando a comando y no config_mode + send_config_set?
+    → Algunos comandos (OSPF, ip route) recalculan la tabla de routing
+      y necesitan más tiempo. Este método ajusta el delay por comando.
+    """
+    for idx, cmd in enumerate(commands):
+        # Comandos lentos: routing/OSPF recalculan SPF
+        is_slow = any(k in cmd.lower() for k in
+                      ("ospf", "network", "router", "ip route", "no router"))
+        delay        = 6   if is_slow else 2
+        read_timeout = 120 if is_slow else 60
+        
+        # Send with adaptive delays and error recovery
+```
+</Accordion>
+
+<Accordion title="Key Function: run_on_switch()">
+```python
+# source/core/connector.py:129-215
+def run_on_switch(sw: dict, config_params: dict, do_clean: bool = False, log_fn=None) -> bool:
+    """
+    Conecta a un switch y le aplica la configuración completa.
+
+    Flujo:
+      1. Conectar por SSH y entrar a modo enable.
+      2. Detectar si es Layer 2 o Layer 3.
+      3. Opcional: limpiar config previa (sin tocar SSH/acceso remoto).
+      4. Generar y enviar los comandos de configuración.
+      5. Guardar la config (write memory / copy run start).
+      6. Desconectar.
+    """
+```
+</Accordion>
+
+## ui/ Directory — Presentation Layer
+
+### widgets.py — Styled Widget Factory
+
+**Responsibilities:**
+- Define global theme colors and fonts
+- Create styled Tkinter widgets (buttons, entries, labels, frames)
+- Apply consistent visual design across all tabs
+- Provide `apply_style()` function for root window
+
+### tabs_sw_dhcp.py — Tabs ① and ②
+
+**Responsibilities:**
+- **Tab ①:** Switch inventory management (add, edit, delete, test connection)
+- **Tab ②:** DHCP pool configuration (network, mask, gateway)
+- Functions: `build_tab_sw()`, `build_tab_dhcp()`
+
+### tab_vlan.py — Tab ③
+
+**Responsibilities:**
+- VLAN creation and naming
+- Port assignment (access/trunk mode)
+- Associate DHCP pools with VLANs
+- Configure VLAN security (block social media, custom ACLs)
+- Function: `build_tab_vlan()`
+
+### tab_routing.py — Tab ④
+
+**Responsibilities:**
+- Static route configuration (destination, mask, next-hop)
+- OSPF configuration (PID, network statements, area)
+- Enable/disable `ip routing`
+- Function: `build_tab_routing()`
+
+### tab_qos.py — Tab ⑤
+
+**Responsibilities:**
+- Class-map configuration (match DSCP, IP, ACL)
+- Policy-map entries (priority, bandwidth, police, shape, set dscp)
+- Service-policy assignment to interfaces
+- Function: `build_tab_qos()`
+
+### tab_exec_backup.py — Tabs ⑥ and ⑦
+
+**Responsibilities:**
+- **Tab ⑥:** Deploy configuration to selected switches with real-time logging
+- **Tab ⑦:** Export/import JSON, download running-config, upload to AWS S3
+- Functions: `build_tab_exec()`, `build_tab_backup()`
+
+### tab_security_gre.py — Tabs ⑧ and ⑨
+
+**Responsibilities:**
+- **Tab ⑧:** Enable secret (MD5), login blocking, banner MOTD
+- **Tab ⑨:** GRE over IPsec tunnel configuration (IKEv1, ESP-AES-256)
+- Functions: `build_tab_security()`, `build_tab_gre()`
+- Functions: `build_security_commands()`, `build_gre_ipsec_commands()`
+
+## Module Import Structure
+
+### Path Resolution
+
+All modules add the project root to `sys.path` for consistent imports:
+
+```python
+# source/app.py:30-32
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+```
+
+### Import Hierarchy
+
+```
+app.py
+├── constants (APP_VERSION)
+├── ui.widgets (apply_style)
+├── ui.tabs_sw_dhcp (build_tab_sw, build_tab_dhcp)
+├── ui.tab_vlan (build_tab_vlan)
+├── ui.tab_routing (build_tab_routing)
+├── ui.tab_qos (build_tab_qos)
+├── ui.tab_exec_backup (build_tab_exec, build_tab_backup)
+│   ├── core.connector (run_on_switch, fetch_running_config)
+│   └── core.command_builder (build_commands, build_cleanup_commands)
+└── ui.tab_security_gre (build_tab_security, build_tab_gre)
+    └── core.command_builder (imported within build_commands)
+```
+
+## Testing and Maintenance
+
+### Unit Testing Core Modules
+
+Since `core/` modules are Tkinter-independent, they can be tested in isolation:
+
+```python
+# Example: Test command generation without GUI
+from core.command_builder import build_commands
+
+commands = build_commands(
+    is_l3=True,
+    chk_intervlan=True,
+    dhcp_pools=[{"name": "POOL1", "net": "192.168.10.0", 
+                 "mask": "255.255.255.0", "gw": "192.168.10.1"}],
+    vlans_data=[],
+    # ... other params
+)
+
+assert "ip routing" in commands
+assert "ip dhcp pool POOL1" in commands
+```
+
+### Code Organization Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Single Responsibility" icon="bullseye">
+    Each module has one clear purpose (connection, command building, UI tab)
+  </Card>
+  
+  <Card title="Dependency Inversion" icon="arrows-up-down">
+    Core modules depend on abstractions (log functions), not concrete GUI
+  </Card>
+  
+  <Card title="Explicit State" icon="database">
+    All state is stored in `SwitchConfiguratorV2` instance, not global variables
+  </Card>
+  
+  <Card title="Defensive Programming" icon="shield-halved">
+    Protected resources, error recovery, adaptive delays
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    High-level design and architectural principles
+  </Card>
+  
+  <Card title="Layer 2 vs Layer 3" icon="layer-group" href="/architecture/layer2-vs-layer3">
+    Detection strategy and configuration differences
+  </Card>
+</CardGroup>

@@ -1,0 +1,342 @@
+---
+title: 'Routing Configuration'
+description: 'Configure inter-VLAN routing, static routes, and OSPF for Layer 3 switches'
+icon: 'route'
+---
+
+# Routing Configuration
+
+This guide covers **Tab ④ Enrutamiento (Routing)** — enabling `ip routing`, adding static routes, and configuring OSPF to announce VLAN subnets to upstream routers.
+
+---
+
+## Overview
+
+**Layer 3 switches** can route traffic between VLANs and participate in dynamic routing protocols. This tab configures:
+
+1. **Inter-VLAN Routing:** Enable `ip routing` to allow communication between VLANs via SVIs
+2. **Static Routes:** Manual routing entries (including default route to R1)
+3. **OSPF:** Dynamic routing protocol to advertise VLAN subnets
+
+<Note>
+**Layer 2 Switches:** All routing configuration is automatically skipped. Inter-VLAN routing must be handled by an external router (router-on-a-stick).
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:110-113`
+</Note>
+
+---
+
+## Inter-VLAN Routing
+
+### Enabling IP Routing
+
+Check **"Activar 'ip routing'"** to allow the Layer 3 switch to route packets between VLANs.
+
+**Generated Commands:**
+```cisco
+ip routing
+service dhcp
+```
+
+**Explanation:**
+- `ip routing`: Enables Layer 3 routing globally
+- `service dhcp`: Required for DHCP relay/server functionality
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:110-111`
+
+### Automatic Layer Detection
+
+When you test a branch connection (Tab ①), the app runs:
+
+```python
+# core/connector.py:test_connection()
+route_output = nc.send_command("show ip route")
+is_l3 = "Gateway of last resort" in route_output
+```
+
+**Behavior:**
+- **Layer 3 detected:** Full routing features enabled
+- **Layer 2 detected:** `ip routing`, SVIs, static routes, and OSPF are automatically skipped
+
+<Warning>
+If you check "Activar ip routing" but the switch is Layer 2 (no `ip routing` support in firmware), the command will be rejected during deployment. Always test connectivity first to verify layer capabilities.
+</Warning>
+
+---
+
+## Static Routes
+
+### Adding a Manual Route
+
+<Steps>
+  <Step title="Enter route parameters">
+    - **Destino (Destination):** Target network (e.g., `10.20.0.0`)
+    - **Máscara (Mask):** Subnet mask (e.g., `255.255.255.0`)
+    - **Next-hop:** Gateway IP (e.g., `10.255.255.1` — R1's interface)
+  </Step>
+
+  <Step title="Click 'Agregar ruta'">
+    The route is added to the static routes list.
+  </Step>
+</Steps>
+
+**Generated Command:**
+```cisco
+ip route 10.20.0.0 255.255.255.0 10.255.255.1
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:210-212`
+
+### Adding a Default Route
+
+The **quick-add default route** button simplifies adding a `0.0.0.0/0` route:
+
+<Steps>
+  <Step title="Enter next-hop IP">
+    The default value is `10.255.255.1` (common R1 gateway). Adjust if your topology differs.
+  </Step>
+
+  <Step title="Click 'Agregar ruta por defecto'">
+    Adds `ip route 0.0.0.0 0.0.0.0 <next-hop>` to the route list.
+  </Step>
+</Steps>
+
+**Generated Command:**
+```cisco
+ip route 0.0.0.0 0.0.0.0 10.255.255.1
+```
+
+**Why This Matters:**
+Without a default route, the switch cannot reach the internet or external subnets. The next-hop should point to R1's interface that provides WAN/internet access.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_routing.py:160-181`
+
+### Duplicate Prevention
+
+If you try to add a second default route, the app prompts:
+```
+Ya existe una ruta por defecto -> 10.255.255.1.
+¿Reemplazarla por -> 10.255.255.2?
+```
+
+Click **Yes** to replace or **No** to keep the existing route.
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_routing.py:169-178`
+
+---
+
+## OSPF Configuration
+
+### Why OSPF?
+
+**Problem:** After creating new VLANs on a Layer 3 switch, R1 (the upstream router) doesn't know those subnets exist. Without OSPF, R1 can't:
+- Route traffic back to the VLAN subnets
+- Perform NAT for internet access
+- Forward inter-branch traffic
+
+**Solution:** Use OSPF to **advertise VLAN subnets** to R1 dynamically.
+
+<Note>
+OSPF is required for internet access if R1 performs NAT. Without OSPF, clients in new VLANs will have no default route out.
+</Note>
+
+### Enabling OSPF
+
+<Steps>
+  <Step title="Check 'Habilitar OSPF'">
+    Activates the OSPF configuration fields.
+  </Step>
+
+  <Step title="Enter OSPF parameters">
+    - **Red (Network):** Subnet to advertise (e.g., `192.168.10.0`)
+    - **Wildcard:** Inverse mask (e.g., `0.0.0.255` for /24)
+    - **Área (Area):** OSPF area number (default: `0` for backbone)
+    - **PID (Process ID):** OSPF process identifier (default: `1`)
+  </Step>
+
+  <Step title="Click 'Agregar red'">
+    Adds the network statement to the OSPF list.
+  </Step>
+</Steps>
+
+**Generated Commands:**
+```cisco
+router ospf 1
+ network 192.168.10.0 0.0.0.255 area 0
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:215-222`
+
+### Wildcard Mask Calculation
+
+The **wildcard mask** is the inverse of the subnet mask:
+
+| Subnet Mask       | Wildcard Mask   |
+|-------------------|------------------|
+| 255.255.255.0     | 0.0.0.255        |
+| 255.255.255.128   | 0.0.0.127        |
+| 255.255.254.0     | 0.0.1.255        |
+
+**Formula:** `wildcard_octet = 255 - subnet_mask_octet`
+
+### Auto-Generate from DHCP Pools
+
+Click **"Auto desde pools DHCP"** to automatically create OSPF network statements for all defined DHCP pools:
+
+<Steps>
+  <Step title="Verify OSPF is enabled">
+    The "Habilitar OSPF" checkbox must be checked first.
+  </Step>
+
+  <Step title="Click 'Auto desde pools DHCP'">
+    The app reads all pools from Tab ② and generates OSPF network statements:
+    ```python
+    # ui/tab_routing.py:221-227
+    for p in app.dhcp_pools:
+        parts = [255 - int(x) for x in p['mask'].split('.')]
+        wild = '.'.join(str(x) for x in parts)
+        app.ospf_networks.append({'network': p['net'], 'wildcard': wild, 'area': '0'})
+    ```
+  </Step>
+</Steps>
+
+**Example Output:**
+If you have two pools:
+- `192.168.10.0/24`
+- `192.168.20.0/24`
+
+Generated OSPF config:
+```cisco
+router ospf 1
+ network 192.168.10.0 0.0.0.255 area 0
+ network 192.168.20.0 0.0.0.255 area 0
+ exit
+```
+
+**Reference:** `/home/daytona/workspace/source/ui/tab_routing.py:209-228`
+
+---
+
+## Complete Routing Example
+
+Scenario: **Branch switch SW-CDMX** with:
+- VLAN 10: `192.168.10.0/24`
+- VLAN 20: `192.168.20.0/24`
+- Upstream router R1: `10.255.255.1`
+
+### Configuration Steps
+
+<Steps>
+  <Step title="Enable inter-VLAN routing">
+    Check "Activar 'ip routing'"
+  </Step>
+
+  <Step title="Add default route to R1">
+    Next-hop: `10.255.255.1`
+  </Step>
+
+  <Step title="Enable OSPF">
+    Check "Habilitar OSPF"
+  </Step>
+
+  <Step title="Auto-generate OSPF networks">
+    Click "Auto desde pools DHCP"
+  </Step>
+</Steps>
+
+### Generated IOS Commands
+
+```cisco
+! Inter-VLAN routing
+ip routing
+service dhcp
+
+! Static routes
+ip route 0.0.0.0 0.0.0.0 10.255.255.1
+
+! OSPF
+router ospf 1
+ network 192.168.10.0 0.0.0.255 area 0
+ network 192.168.20.0 0.0.0.255 area 0
+ exit
+```
+
+### Verification Commands
+
+After deployment, verify routing:
+
+```cisco
+! Check routing table
+show ip route
+
+! Verify OSPF neighbors
+show ip ospf neighbor
+
+! Confirm OSPF advertised networks
+show ip ospf database
+
+! Test connectivity to R1
+ping 10.255.255.1
+```
+
+---
+
+## Cleanup Behavior
+
+<Warning>
+**Selective Cleanup:** When you click "Limpiar configuración" (Tab ⑥), the app only removes routes that **it previously configured**. Pre-existing routes (manually configured outside the app) are preserved.
+
+**Reference:** `/home/daytona/workspace/source/core/command_builder.py:373-390`
+</Warning>
+
+**OSPF Cleanup:**
+- Only `network` statements added by the app are removed
+- The OSPF process itself (`router ospf 1`) is **never deleted** to avoid breaking pre-existing routing
+- Uplink/loopback OSPF statements remain intact
+
+**Static Route Cleanup:**
+```python
+# command_builder.py:376-379
+for rt in static_routes:
+    rt_str = f"{rt['dest']} {rt['mask']} {rt['nexthop']}"
+    if f"ip route {rt_str}" in raw:
+        cleanup.append(f"no ip route {rt_str}")
+```
+
+Only routes matching the app's configuration are removed.
+
+---
+
+## Workflow Summary
+
+<Steps>
+  <Step title="Enable IP routing (L3 only)">
+    Check "Activar 'ip routing'" to enable inter-VLAN routing.
+  </Step>
+
+  <Step title="Add default route to R1">
+    Use the quick-add button with R1's gateway IP.
+  </Step>
+
+  <Step title="Add static routes (optional)">
+    Define routes to other branches or external networks.
+  </Step>
+
+  <Step title="Enable and configure OSPF">
+    Use "Auto desde pools DHCP" or manually add network statements.
+  </Step>
+
+  <Step title="Verify configuration">
+    Preview commands in Tab ⑥ before deploying.
+  </Step>
+</Steps>
+
+---
+
+## Reference Files
+
+- UI Logic: `/home/daytona/workspace/source/ui/tab_routing.py`
+- Routing Commands: `/home/daytona/workspace/source/core/command_builder.py:108-222`
+- OSPF Auto-Generation: `/home/daytona/workspace/source/ui/tab_routing.py:209-228`
+- Cleanup Logic: `/home/daytona/workspace/source/core/command_builder.py:373-390`

@@ -1,0 +1,252 @@
+---
+title: 'Configuration Execution'
+description: 'Apply configuration to switches with real-time logging and branch selection'
+---
+
+## Overview
+
+Tab ⑥ (Execution) allows you to apply the configured settings to selected branch switches with real-time console output. The execution process handles SSH connection, Layer 2/3 detection, optional cleanup, command deployment, and configuration saving.
+
+## Branch Selection
+
+Before executing, select one or more branches from the **Sucursales** (Branches) listbox in Tab ①:
+
+- Multiple branches can be selected using `Ctrl+Click` or `Shift+Click`
+- The execution will run sequentially on each selected switch
+- Progress and errors are logged in real-time to the console area
+
+<Note>
+If no branches are selected, a warning dialog will appear: "Selecciona al menos una sucursal en la pestaña ①."
+</Note>
+
+## Apply Configuration
+
+The **▶ APLICAR A SUCURSALES SELECCIONADAS** button triggers the deployment process:
+
+### Cleanup Confirmation
+
+When you click Apply, a dialog asks:
+
+```
+¿Eliminar configuración anterior del switch antes de aplicar?
+(Recomendado para re-configurar)
+```
+
+- **Yes**: Runs cleanup commands first (see [Safety Protections](/operations/safety-protections))
+- **No**: Applies configuration on top of existing settings
+
+<Warning>
+Cleanup is **recommended** when re-configuring to avoid conflicts between old and new settings.
+</Warning>
+
+## Execution Flow
+
+The `run_on_switch()` function in `core/connector.py:129` orchestrates the deployment:
+
+```python
+def run_on_switch(sw: dict, config_params: dict, do_clean: bool = False, log_fn=None) -> bool:
+    """
+    Conecta a un switch y le aplica la configuración completa.
+
+    Flujo:
+      1. Conectar por SSH y entrar a modo enable.
+      2. Detectar si es Layer 2 o Layer 3.
+      3. Opcional: limpiar config previa (sin tocar SSH/acceso remoto).
+      4. Generar y enviar los comandos de configuración.
+      5. Guardar la config (write memory / copy run start).
+      6. Desconectar.
+    """
+```
+
+### Step-by-Step Process
+
+<Steps>
+  <Step title="SSH Connection">
+    Connects using Netmiko with credentials from the branch configuration:
+    - Device type: `cisco_ios`
+    - Global delay factor: `2`
+    - Read timeout: `60` seconds (120s for slow commands)
+    - Fast CLI mode enabled
+    
+    Reference: `connector.py:26-47`
+  </Step>
+  
+  <Step title="Layer Detection">
+    Runs `show ip route connected` to detect if the switch has `ip routing` active:
+    
+    ```python
+    def detect_l3(nc) -> bool:
+        out = nc.send_command("show ip route connected", delay_factor=2)
+        return bool(re.search(r'^C\s+', out, re.MULTILINE))
+    ```
+    
+    - **Layer 3**: Routes present → SVIs with IP addresses will be configured
+    - **Layer 2**: No routes → Only VLANs and port assignments (gateway is on R1)
+    
+    Reference: `connector.py:50-69`
+  </Step>
+  
+  <Step title="Optional Cleanup">
+    If cleanup was selected, `build_cleanup_commands()` removes previous configuration while preserving:
+    - SSH settings and crypto keys
+    - VTY lines and users
+    - GigabitEthernet0/0 (uplink)
+    - Pre-existing routes/OSPF networks
+    
+    See [Safety Protections](/operations/safety-protections) for details.
+  </Step>
+  
+  <Step title="Command Generation">
+    `build_commands()` generates the full IOS command list based on all tabs:
+    - DHCP pools (L3 only)
+    - VLANs and port assignments
+    - ACLs and SVIs (L3 only)
+    - Static routes
+    - OSPF networks
+    - QoS class-maps and policy-maps
+    - Security settings (enable secret, login block-for, banner)
+    - GRE over IPsec tunnels
+    
+    Reference: `command_builder.py:53-286`
+  </Step>
+  
+  <Step title="Command-by-Command Execution">
+    Commands are sent individually with adaptive delays:
+    
+    ```python
+    def send_cmd_by_cmd(nc, commands: list, log_fn=None):
+        for idx, cmd in enumerate(commands):
+            # Slow commands (OSPF, routing) get longer delays
+            is_slow = any(k in cmd.lower() for k in 
+                         ("ospf", "network", "router", "ip route", "no router"))
+            delay        = 6   if is_slow else 2
+            read_timeout = 120 if is_slow else 60
+    ```
+    
+    **Why command-by-command?** 
+    - OSPF and routing commands recalculate the routing table and need extra time
+    - Individual error handling per command prevents entire config failure
+    - Real-time logging shows progress
+    
+    Reference: `connector.py:72-127`
+  </Step>
+  
+  <Step title="Save Configuration">
+    Calls `nc.save_config()` which runs `write memory` or `copy run start` depending on IOS version.
+    
+    Reference: `connector.py:197`
+  </Step>
+</Steps>
+
+## Real-Time Log Output
+
+The console area (`app.log_area`) displays:
+
+- **Connection status**: Hostname and Layer 2/3 detection
+- **Progress**: `[idx/total] command` for each command sent
+- **IOS responses**: Warnings or errors from the switch
+- **Final result**: ✔ Success or ✘ Error with reason
+
+### Example Output
+
+```
+════════════════════════════════════════════════════════
+  Sucursal: SW-CDMX  |  192.168.1.10
+════════════════════════════════════════════════════════
+  ✔ Conectado: 'SW-CDMX'  |  Layer 3
+  [Limpieza] 12 comandos...
+  [1/12] no ip dhcp pool VLAN10
+  [2/12] no vlan 10
+  [Limpieza] ✔
+  [Config] Enviando 45 comandos...
+  [1/45] ip routing
+  [2/45] service dhcp
+  [3/45] ip dhcp excluded-address 192.168.10.1
+  ...
+  [45/45] exit
+  ✔ SW-CDMX — GUARDADO EXITOSAMENTE
+
+════════════════════════════════════════════════════════
+  RESULTADO: 1 exitosa(s)  |  0 fallida(s)
+════════════════════════════════════════════════════════
+```
+
+## Error Handling
+
+The execution handles common errors gracefully:
+
+<AccordionGroup>
+  <Accordion title="Authentication Failure">
+    ```
+    ✘ SW-CDMX — Error de Autenticación
+    ```
+    
+    **Cause**: Wrong username, password, or enable secret
+    
+    **Solution**: Verify credentials in Tab ① and test connection
+  </Accordion>
+  
+  <Accordion title="Timeout">
+    ```
+    ✘ SW-CDMX — Timeout
+    ```
+    
+    **Cause**: Network unreachable or switch not responding
+    
+    **Solution**: Check IP address and network connectivity
+  </Accordion>
+  
+  <Accordion title="Command Error">
+    ```
+    [ERROR] 'ip routing' -> Invalid input detected at '^' marker
+    ```
+    
+    **Cause**: Layer 2 switch doesn't support the command
+    
+    **Solution**: This is automatically handled — L2 switches skip `ip routing` and SVI IP addresses. Check that Layer detection is working correctly.
+  </Accordion>
+  
+  <Accordion title="Socket Closed">
+    ```
+    [FATAL] Socket cerrado, abortando este switch.
+    ```
+    
+    **Cause**: SSH connection lost mid-execution
+    
+    **Solution**: The switch may have rejected a command or rebooted. Check running-config to see what was applied.
+  </Accordion>
+</AccordionGroup>
+
+## Export After Success
+
+If at least one branch succeeds, a dialog offers to export the configuration to JSON:
+
+```python
+if ok > 0 and messagebox.askyesno("Exportar",
+                                  "¿Exportar esta configuración a .json?"):
+    export_config(app)
+```
+
+This saves a timestamped JSON file for version control and rollback. See [Backup & Export](/operations/backup-s3) for details.
+
+## Clean Switch (Separate Button)
+
+The **🗑 LIMPIAR SWITCH** button removes configuration **without applying new settings**:
+
+- Only cleans what the app previously configured
+- **Never touches**: SSH, VTY, crypto keys, GigabitEthernet0/0
+- Useful for resetting a switch to factory state (VLANs-wise)
+
+<Warning>
+This action **does not** revert to startup-config. It removes VLANs, DHCP pools, ACLs, QoS policies, and OSPF networks while keeping the switch accessible via SSH.
+</Warning>
+
+Reference: `tab_exec_backup.py:162-203`
+
+## Related Functions
+
+- **`deploy_config(app)`** — Main deployment orchestrator (`tab_exec_backup.py:118`)
+- **`run_on_switch()`** — Core execution logic (`connector.py:129`)
+- **`send_cmd_by_cmd()`** — Command sender with adaptive delays (`connector.py:72`)
+- **`build_commands()`** — Command generator (`command_builder.py:53`)
+- **`detect_l3()`** — Layer 2/3 detection (`connector.py:50`)

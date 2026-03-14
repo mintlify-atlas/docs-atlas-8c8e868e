@@ -1,97 +1,102 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "SECURE-BRANCH-lac"
+description: "Python-based Infrastructure as Code (IaC) solution for automating, securing, and segmenting branch office networks using Cisco devices"
 ---
 
-## Setting up
+<img
+  className="block dark:hidden"
+  src="/logo/light.svg"
+  alt="SECURE-BRANCH-lac"
+  width="200"
+/>
+<img
+  className="hidden dark:block"
+  src="/logo/dark.svg"
+  alt="SECURE-BRANCH-lac"
+  width="200"
+/>
 
-Get your documentation site up and running in minutes.
+## Welcome to SECURE-BRANCH-lac
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+SECURE-BRANCH-lac is a comprehensive GUI tool for mass-configuring Cisco IOSvL2 switches across multiple branch offices. Built with Python and Tkinter, it automates network infrastructure deployment with support for VLANs, DHCP, QoS, routing, security hardening, and GRE over IPsec tunnels.
 
-## Make it yours
+**Target Firmware:** `vios_l2-ADVENTERPRISEK9-M`, IOS Experimental 15.2(20200924:215240)
 
-Design a docs site that looks great and empowers your users.
+## Key Features
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Automated Branch Configuration" icon="network-wired" color="#58a6ff">
+    Configure multiple switches simultaneously with automatic Layer 2/3 detection
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="VLAN Segmentation" icon="diagram-project" color="#3fb950">
+    Create VLANs with DHCP pools and security ACLs in a single workflow
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="QoS MQC" icon="gauge-high" color="#f78166">
+    Implement Modular QoS CLI with class-maps, policy-maps, and service policies
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Security Hardening" icon="shield-halved" color="#58a6ff">
+    Enable secret, login block-for, and custom MOTD banners
   </Card>
-</Columns>
+  <Card title="GRE over IPsec" icon="lock" color="#3fb950">
+    Configure encrypted GRE tunnels with IKEv1 and ESP-AES-256
+  </Card>
+  <Card title="AWS S3 Backup" icon="cloud-arrow-up" color="#f78166">
+    Automated backup of running-config to S3 with AES256 encryption
+  </Card>
+  <Card title="OSPF Routing" icon="route" color="#58a6ff">
+    Configure dynamic routing with OSPF and static routes
+  </Card>
+  <Card title="Safety Protections" icon="shield-check" color="#3fb950">
+    Built-in protections for uplink interfaces and SSH access
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Start
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up dependencies and activate the virtual environment
+  </Card>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Configure your first branch office in minutes
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture/overview">
+    Understand the application structure and workflow
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/command-builder">
+    Explore core modules and functions
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Configuration Workflow
 
-## Need inspiration?
+SECURE-BRANCH-lac provides a nine-tab interface covering the complete configuration lifecycle:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
+1. **Sucursales** — Add switches with SSH credentials and test connections
+2. **DHCP** — Define DHCP pools (network, mask, gateway)
+3. **VLANs y Puertos** — Create VLANs, assign ports (access/trunk), link DHCP pools
+4. **Enrutamiento** — Configure static routes, default gateway, and OSPF
+5. **QoS MQC** — Define class-maps, policy-maps with police/shape/priority/set DSCP
+6. **Ejecución** — Apply configuration to selected switches with real-time logging
+7. **Backup** — Export/import JSON, download running-config, upload to AWS S3
+8. **Seguridad** — Enable secret, login block-for, banner MOTD
+9. **GRE/IPsec** — Configure GRE tunnels encrypted with IPsec
+
+<Note>
+All configurations are applied safely with automatic detection of Layer 2 vs Layer 3 switches and built-in protections for uplink interfaces (GigabitEthernet0/0).
+</Note>
+
+## Use Cases
+
+- **Multi-site branch office deployment** — Configure dozens of switches consistently
+- **Network segmentation** — Isolate departments with VLANs and ACLs
+- **QoS implementation** — Prioritize voice, video, and critical data traffic
+- **Secure tunneling** — Connect branch offices with GRE over IPsec
+- **Disaster recovery** — Automated backups to AWS S3 with encryption
+- **GNS3 simulation** — Test configurations in virtual environments before production
+
+## Get Started
+
+<Card title="Installation Guide" icon="play" href="/installation" horizontal>
+  Install dependencies and run your first configuration in under 5 minutes
 </Card>

@@ -1,0 +1,435 @@
+---
+title: 'connector'
+description: 'SSH connection and command execution module — encapsulates all Netmiko logic for switch interaction'
+icon: 'network-wired'
+---
+
+## Overview
+
+The `connector` module encapsulates all Netmiko SSH connection logic for interacting with Cisco IOS switches. It handles connection management, Layer 2/3 detection, command execution with error handling, configuration deployment, and backup operations.
+
+This module is UI-agnostic — it accepts a logging function as a parameter, making it usable from both the GUI and command-line scripts.
+
+**Module Path:** `core/connector.py`
+
+---
+
+## Functions
+
+### make_device_params()
+
+Constructs the parameter dictionary that Netmiko needs for SSH connection.
+
+```python
+def make_device_params(sw: dict) -> dict
+```
+
+<ParamField path="sw" type="dict" required>
+  Switch credentials dictionary with keys:
+  - `ip` (str): Switch management IP address
+  - `user` (str): SSH username
+  - `pass` (str): SSH password
+  - `secret` (str): Enable mode password
+</ParamField>
+
+<ResponseField name="return" type="dict">
+  Complete Netmiko ConnectHandler parameters:
+  - `device_type`: `'cisco_ios'`
+  - `host`: Switch IP
+  - `username`: SSH username
+  - `password`: SSH password
+  - `secret`: Enable password
+  - `global_delay_factor`: `2` (wait time multiplier)
+  - `read_timeout_override`: `60` (seconds)
+  - `fast_cli`: `True` (reduces default delays)
+</ResponseField>
+
+#### Example
+
+```python
+from core.connector import make_device_params
+from netmiko import ConnectHandler
+
+sw = {
+    'ip': '192.168.1.10',
+    'user': 'admin',
+    'pass': 'cisco123',
+    'secret': 'enable123',
+}
+
+# Create connection parameters
+params = make_device_params(sw)
+
+# Connect to switch
+nc = ConnectHandler(**params)
+nc.enable()
+print(nc.find_prompt())  # 'Switch#'
+nc.disconnect()
+```
+
+---
+
+### detect_l3()
+
+Detects if the switch has `ip routing` active (Layer 3) or not (Layer 2).
+
+```python
+def detect_l3(nc) -> bool
+```
+
+<ParamField path="nc" type="netmiko.ConnectHandler" required>
+  Active Netmiko connection (in enable mode).
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  - `True` = Layer 3 switch (ip routing active)
+  - `False` = Layer 2 switch or detection failed
+</ResponseField>
+
+#### Detection Strategy
+
+Executes `show ip route connected` and searches for lines beginning with `'C'` (directly connected routes). If connected routes exist, the switch is routing.
+
+If the command fails (e.g., Layer 2 switch doesn't support `show ip route`), the function safely returns `False`.
+
+#### Example
+
+```python
+from core.connector import make_device_params, detect_l3
+from netmiko import ConnectHandler
+
+sw = {'ip': '192.168.1.10', 'user': 'admin', 'pass': 'cisco', 'secret': 'cisco'}
+nc = ConnectHandler(**make_device_params(sw))
+nc.enable()
+
+is_l3 = detect_l3(nc)
+if is_l3:
+    print("Layer 3 switch detected — will configure SVIs and DHCP")
+else:
+    print("Layer 2 switch detected — skipping ip routing features")
+
+nc.disconnect()
+```
+
+---
+
+### send_cmd_by_cmd()
+
+Sends a list of IOS commands to the switch individually with adaptive delays and error handling per command.
+
+```python
+def send_cmd_by_cmd(
+    nc,
+    commands: list,
+    log_fn = None
+)
+```
+
+<ParamField path="nc" type="netmiko.ConnectHandler" required>
+  Active Netmiko connection (already in config mode or enable mode).
+</ParamField>
+
+<ParamField path="commands" type="list[str]" required>
+  List of IOS commands to execute.
+</ParamField>
+
+<ParamField path="log_fn" type="callable" default="None">
+  Optional logging function. Signature: `log_fn(str)`. Logs each command and output.
+</ParamField>
+
+#### Why Command-by-Command?
+
+Instead of using `send_config_set()` for all commands at once, this function sends each command individually because:
+
+- **OSPF/routing commands** recalculate routing tables and need extra processing time
+- **Per-command error handling** allows recovery without aborting the entire batch
+- **Adaptive delays** adjust wait time based on command type
+
+#### Slow Command Detection
+
+Commands containing these keywords receive extended delays:
+- `"ospf"`, `"network"`, `"router"`, `"ip route"`, `"no router"`
+- **Slow delay**: 6x multiplier, 120s timeout
+- **Fast delay**: 2x multiplier, 60s timeout
+
+#### Error Recovery
+
+If a command fails:
+1. Error is logged via `log_fn`
+2. Function waits 2 seconds
+3. Attempts to recover the SSH channel by sending `\n`
+4. If socket is closed, raises exception to abort switch configuration
+
+#### Example
+
+```python
+from core.connector import make_device_params, send_cmd_by_cmd
+from netmiko import ConnectHandler
+
+sw = {'ip': '192.168.1.10', 'user': 'admin', 'pass': 'cisco', 'secret': 'cisco'}
+nc = ConnectHandler(**make_device_params(sw))
+nc.enable()
+nc.config_mode()
+
+commands = [
+    "vlan 10",
+    "name VENTAS",
+    "exit",
+    "interface GigabitEthernet0/1",
+    "switchport mode access",
+    "switchport access vlan 10",
+    "no shutdown",
+    "exit",
+]
+
+# Send commands with logging
+send_cmd_by_cmd(nc, commands, log_fn=print)
+
+nc.exit_config_mode()
+nc.save_config()
+nc.disconnect()
+```
+
+---
+
+### run_on_switch()
+
+Connects to a switch and applies complete configuration with optional cleanup.
+
+```python
+def run_on_switch(
+    sw: dict,
+    config_params: dict,
+    do_clean: bool = False,
+    log_fn = None
+) -> bool
+```
+
+<ParamField path="sw" type="dict" required>
+  Switch information:
+  - `name` (str): Switch display name
+  - `ip` (str): Management IP address
+  - `user` (str): SSH username
+  - `pass` (str): SSH password
+  - `secret` (str): Enable password
+</ParamField>
+
+<ParamField path="config_params" type="dict" required>
+  All parameters for `build_commands()` function:
+  - `dhcp_pools`, `vlans_data`, `static_routes`, `ospf_networks`, etc.
+  - See [command_builder.build_commands()](/api/command-builder#build_commands) for full parameter list
+</ParamField>
+
+<ParamField path="do_clean" type="bool" default="False">
+  If `True`, runs cleanup commands before applying new configuration.
+</ParamField>
+
+<ParamField path="log_fn" type="callable" default="None">
+  Optional logging function.
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  - `True` = Configuration applied and saved successfully
+  - `False` = Error occurred (authentication, timeout, or execution failure)
+</ResponseField>
+
+#### Execution Flow
+
+1. **Connect** — Establish SSH connection and enter enable mode
+2. **Detect** — Determine if switch is Layer 2 or Layer 3
+3. **Cleanup** (optional) — Run cleanup commands if `do_clean=True`
+4. **Configure** — Generate and send configuration commands
+5. **Save** — Execute `write memory` / `copy run start`
+6. **Disconnect** — Close SSH connection
+
+#### Error Handling
+
+Catches and logs specific exceptions:
+- **NetmikoAuthenticationException** — Wrong credentials
+- **NetmikoTimeoutException** — Network timeout or unreachable
+- **Generic Exception** — Any other error (includes full traceback in log)
+
+#### Example
+
+```python
+from core.connector import run_on_switch
+
+sw = {
+    'name': 'SW-MATRIZ',
+    'ip': '192.168.1.10',
+    'user': 'admin',
+    'pass': 'cisco123',
+    'secret': 'enable123',
+}
+
+config_params = {
+    'chk_intervlan': True,
+    'dhcp_pools': [
+        {'name': 'VLAN10', 'net': '192.168.10.0', 'mask': '255.255.255.0', 'gw': '192.168.10.1'},
+    ],
+    'vlans_data': [
+        {
+            'id': '10',
+            'name': 'VENTAS',
+            'assign_ports': True,
+            'ports': 'Gi0/1-5',
+            'port_mode': 'access',
+            'block_social': False,
+            'custom_acl': '',
+            'dhcp_idx': 0,
+        },
+    ],
+    'static_routes': [],
+    'chk_ospf': False,
+    'ospf_pid': '1',
+    'ospf_networks': [],
+    'qos_classes': [],
+    'pol_entries': [],
+    'pol_name': '',
+    'service_policies': [],
+}
+
+# Apply configuration with cleanup
+success = run_on_switch(
+    sw=sw,
+    config_params=config_params,
+    do_clean=True,
+    log_fn=print,
+)
+
+if success:
+    print("Configuration applied successfully!")
+else:
+    print("Configuration failed — check logs")
+```
+
+---
+
+### fetch_running_config()
+
+Downloads the current running-config from the switch.
+
+```python
+def fetch_running_config(sw: dict) -> str
+```
+
+<ParamField path="sw" type="dict" required>
+  Switch credentials dictionary (same format as `make_device_params()`).
+</ParamField>
+
+<ResponseField name="return" type="str">
+  Complete running-config text.
+</ResponseField>
+
+<ResponseField name="raises" type="Exception">
+  Raises exception if connection or authentication fails.
+</ResponseField>
+
+#### Example
+
+```python
+from core.connector import fetch_running_config
+
+sw = {'ip': '192.168.1.10', 'user': 'admin', 'pass': 'cisco', 'secret': 'cisco'}
+
+try:
+    config = fetch_running_config(sw)
+    
+    # Save to file
+    with open('backup-sw1.txt', 'w') as f:
+        f.write(config)
+    
+    print(f"Backup saved: {len(config)} bytes")
+    
+except Exception as e:
+    print(f"Backup failed: {e}")
+```
+
+---
+
+### test_connection()
+
+Tests SSH connection to switch and detects Layer 2 vs Layer 3.
+
+```python
+def test_connection(sw: dict)
+```
+
+<ParamField path="sw" type="dict" required>
+  Switch credentials dictionary (same format as `make_device_params()`).
+</ParamField>
+
+<ResponseField name="return" type="dict">
+  Connection test results:
+  - `hostname` (str): Switch hostname from prompt
+  - `is_l3` (bool): `True` if Layer 3 switch
+  - `ver_out` (str): First 50 chars of `show version | include IOS` output
+</ResponseField>
+
+<ResponseField name="raises" type="Exception">
+  Raises exception if connection or authentication fails.
+</ResponseField>
+
+#### Use Case
+
+This function is used by the GUI to verify credentials before attempting full configuration deployment.
+
+#### Example
+
+```python
+from core.connector import test_connection
+
+sw = {'ip': '192.168.1.10', 'user': 'admin', 'pass': 'cisco', 'secret': 'cisco'}
+
+try:
+    result = test_connection(sw)
+    
+    print(f"Hostname: {result['hostname']}")
+    print(f"Layer: {'L3' if result['is_l3'] else 'L2'}")
+    print(f"IOS Version: {result['ver_out']}")
+    
+    # Example output:
+    # Hostname: SW-MATRIZ
+    # Layer: L3
+    # IOS Version: Cisco IOS Software, vios_l2 Software (vios_l2-ADVE
+    
+except Exception as e:
+    print(f"Connection test failed: {e}")
+```
+
+---
+
+## Usage Notes
+
+### Connection Best Practices
+
+1. **Always enable mode**: Call `nc.enable()` after connecting
+2. **Use config_mode for commands**: Enter config mode with `nc.config_mode()` before sending config commands
+3. **Save configuration**: Call `nc.save_config()` after applying changes
+4. **Always disconnect**: Use `nc.disconnect()` in finally block to prevent hung sessions
+
+### Delay Configuration
+
+The module uses conservative delay settings to ensure reliability:
+- `global_delay_factor: 2` — Doubles default Netmiko delays
+- `read_timeout_override: 60` — 60-second read timeout
+- `fast_cli: True` — Reduces unnecessary waits between commands
+
+For slower switches or high-latency connections, increase `global_delay_factor` to `3` or `4`.
+
+### Error Recovery
+
+`send_cmd_by_cmd()` attempts to recover from individual command failures by:
+1. Logging the error
+2. Waiting 2 seconds
+3. Sending newline to clear any pending input
+4. Continuing with next command (unless socket is closed)
+
+This prevents a single typo or unsupported command from aborting the entire configuration.
+
+---
+
+## See Also
+
+- [command_builder](/api/command-builder) — Generates commands that this module executes
+- [constants](/api/constants) — `UPLINK_IFACE` protection constant

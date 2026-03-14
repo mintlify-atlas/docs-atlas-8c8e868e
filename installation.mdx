@@ -1,0 +1,224 @@
+---
+title: Installation
+description: Install SECURE-BRANCH-lac and configure the required dependencies
+---
+
+## System Requirements
+
+SECURE-BRANCH-lac requires:
+- **Python 3.x** with `tkinter` (included in standard Python distributions)
+- **SSH connectivity** to target Cisco IOSvL2 switches
+- **Linux/Unix environment** (tested on Linux)
+
+## Dependencies
+
+SECURE-BRANCH-lac relies on the following Python packages:
+
+| Package | Purpose | Required |
+|---------|---------|----------|
+| `tkinter` | Graphical user interface | ✅ Yes (included in Python standard library) |
+| `netmiko` | SSH connection to Cisco switches | ✅ Yes |
+| `boto3` | AWS S3 backup functionality | ⚠️ Optional (only if using S3 backups) |
+
+<Note>
+The `tkinter` library is included with standard Python installations and does not require separate installation.
+</Note>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install netmiko for SSH connectivity">
+    Install the `netmiko` library to enable SSH connections to Cisco switches:
+    
+    ```bash
+    pip install netmiko --break-system-packages
+    ```
+    
+    <Note>
+    The `--break-system-packages` flag is used to install packages in environments where pip is configured to prevent system-wide installations. Alternatively, use a virtual environment (recommended).
+    </Note>
+  </Step>
+  
+  <Step title="Install boto3 for AWS S3 backup (Optional)">
+    If you plan to use the AWS S3 backup feature, install `boto3`:
+    
+    ```bash
+    pip install boto3 --break-system-packages
+    ```
+    
+    <Tip>
+    This step can be skipped if you only need local backups or JSON export/import functionality.
+    </Tip>
+  </Step>
+  
+  <Step title="Navigate to the project directory">
+    Change to the SECURE-BRANCH-lac project directory:
+    
+    ```bash
+    cd SECURE-BRANCH-lac
+    ```
+  </Step>
+</Steps>
+
+## Virtual Environment Setup (Recommended)
+
+For isolated dependency management, it's recommended to use a Python virtual environment:
+
+<Steps>
+  <Step title="Create a virtual environment">
+    Create a new virtual environment in the project directory:
+    
+    ```bash
+    python3 -m venv env
+    ```
+    
+    This creates an `env/` directory containing the isolated Python environment.
+  </Step>
+  
+  <Step title="Activate the virtual environment">
+    Activate the virtual environment:
+    
+    ```bash
+    source env/bin/activate
+    ```
+    
+    Your shell prompt will change to indicate the virtual environment is active (usually prefixed with `(env)`).
+  </Step>
+  
+  <Step title="Install dependencies in the virtual environment">
+    With the virtual environment activated, install the required packages:
+    
+    ```bash
+    pip install netmiko
+    pip install boto3  # Optional, for S3 backup
+    ```
+    
+    <Note>
+    When using a virtual environment, the `--break-system-packages` flag is not required.
+    </Note>
+  </Step>
+</Steps>
+
+## Running the Application
+
+Once dependencies are installed, you can launch SECURE-BRANCH-lac:
+
+### With Virtual Environment
+
+```bash
+cd SECURE-BRANCH-lac
+source env/bin/activate
+python app.py
+```
+
+### Without Virtual Environment
+
+```bash
+cd SECURE-BRANCH-lac
+python app.py
+```
+
+<Tip>
+**First Launch**
+
+On first launch, the application window will open with nine tabs. Start by adding switches in the **① Branches** tab to begin configuration.
+</Tip>
+
+## Verifying Installation
+
+To verify that SECURE-BRANCH-lac is properly installed:
+
+<Steps>
+  <Step title="Check Python and dependencies">
+    Verify Python and required packages are available:
+    
+    ```bash
+    python --version
+    python -c "import tkinter; print('tkinter OK')"
+    python -c "import netmiko; print('netmiko OK')"
+    python -c "import boto3; print('boto3 OK')"  # Only if S3 backup is needed
+    ```
+    
+    Each import should print "OK" without errors.
+  </Step>
+  
+  <Step title="Launch the application">
+    Run the application:
+    
+    ```bash
+    python app.py
+    ```
+    
+    The GUI window should open with the title:
+    
+    ```
+    Configurador IOSvL2 — v2.2  |  IOSvL2 15.2 / GRE-IPsec / S3 Backup
+    ```
+  </Step>
+  
+  <Step title="Verify UI elements">
+    Confirm that all nine tabs are visible:
+    - ① Branches (Sucursales)
+    - ② DHCP
+    - ③ VLANs and Ports
+    - ④ Routing
+    - ⑤ QoS MQC
+    - ⑥ Execution
+    - ⑦ Backup
+    - ⑧ Security
+    - ⑨ GRE/IPsec
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ModuleNotFoundError: No module named 'netmiko'">
+    The `netmiko` package is not installed. Install it using:
+    
+    ```bash
+    pip install netmiko --break-system-packages
+    ```
+    
+    Or if using a virtual environment:
+    
+    ```bash
+    source env/bin/activate
+    pip install netmiko
+    ```
+  </Accordion>
+  
+  <Accordion title="tkinter not available">
+    On some Linux distributions, `tkinter` must be installed separately:
+    
+    **Ubuntu/Debian:**
+    ```bash
+    sudo apt-get install python3-tk
+    ```
+    
+    **Fedora/RHEL:**
+    ```bash
+    sudo dnf install python3-tkinter
+    ```
+  </Accordion>
+  
+  <Accordion title="AWS S3 backup not working">
+    Ensure `boto3` is installed:
+    
+    ```bash
+    pip install boto3 --break-system-packages
+    ```
+    
+    Also verify your AWS credentials are configured correctly in the **⑦ Backup** tab.
+  </Accordion>
+  
+  <Accordion title="Import errors from core/ or ui/ modules">
+    The application automatically adds the project directory to Python's module search path. If you encounter import errors, ensure you're running `python app.py` from the `SECURE-BRANCH-lac/` directory and not from a subdirectory.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Learn how to configure your first branch with a step-by-step walkthrough
+</Card>

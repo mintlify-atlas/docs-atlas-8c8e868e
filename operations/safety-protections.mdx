@@ -1,0 +1,321 @@
+---
+title: 'Safety Protections'
+description: 'Automatic safeguards that prevent accidental lockout and preserve critical switch settings'
+---
+
+## Overview
+
+The app includes multiple **automatic protections** to prevent accidental lockout and preserve pre-existing network configurations when cleaning or re-deploying to switches.
+
+## Protected Elements
+
+| Protection | Why |
+|------------|-----|
+| **GigabitEthernet0/0** | Management uplink — never modified |
+| **SSH / VTY / crypto keys** | Prevents remote access lockout |
+| **VLAN 1** | Native management VLAN — never deleted |
+| **Pre-existing routes** | Only removes routes the app configured |
+| **Pre-existing OSPF networks** | Only removes networks the app added |
+| **Enable secret** | Applied **last** to avoid closing active SSH session |
+
+Reference: README.md lines 130-139
+
+## GigabitEthernet0/0 Protection
+
+The uplink interface (`UPLINK_IFACE = "GigabitEthernet0/0"`) is **never modified** by the app:
+
+- **No port mode changes** (access/trunk)
+- **No VLAN assignments**
+- **No QoS service-policy** applied
+
+### Implementation
+
+In `build_cleanup_commands()`, all uplink interfaces are skipped:
+
+```python
+for iface, body in re.findall(
+        r'^interface (\S+)\n((?:[ \t].+\n)*)', raw, re.MULTILINE):
+    if 'Vlan' in iface:
+        continue   # saltar SVIs (ya manejadas arriba)
+    if UPLINK_IFACE.lower() in iface.lower():
+        continue   # NUNCA tocar el uplink
+    if 'switchport access vlan' in body:
+        cleanup += [f"interface {iface}", "no switchport access vlan",
+                    "no switchport mode", "exit"]
+```
+
+Reference: `command_builder.py:352-365`
+
+<Note>
+The uplink interface name is defined in `constants.py:UPLINK_IFACE`. If your switches use a different uplink (e.g., `GigabitEthernet0/1`), update the constant.
+</Note>
+
+## SSH & VTY Protection
+
+The cleanup process **never touches**:
+
+- VTY line configuration (`line vty 0 15`)
+- SSH settings (`ip ssh version 2`, timeouts, etc.)
+- Crypto keys (`crypto key generate rsa`)
+- User accounts (`username admin privilege 15`)
+
+### Why This Matters
+
+Without this protection, running cleanup could:
+
+1. Delete the SSH crypto key → SSH disabled
+2. Remove VTY access → No Telnet/SSH access
+3. Delete user accounts → Authentication fails
+
+**Result**: Complete remote lockout requiring physical console access.
+
+Reference: README.md line 135
+
+## Layer 2 Switch Handling
+
+When a switch is detected as Layer 2 (no `ip routing` active), the app automatically skips:
+
+- `ip routing` and `service dhcp` commands
+- DHCP pool creation
+- SVI IP address assignments
+
+### Detection Logic
+
+```python
+def detect_l3(nc) -> bool:
+    """
+    Detecta si el switch tiene ip routing activo (Layer 3) o no (Layer 2).
+    """
+    try:
+        out = nc.send_command("show ip route connected", delay_factor=2)
+        return bool(re.search(r'^C\s+', out, re.MULTILINE))
+    except Exception:
+        return False   # Si falla, asumimos L2 por seguridad
+```
+
+Reference: `connector.py:50-69`
+
+### Configuration Differences
+
+| Feature | Layer 3 Switch | Layer 2 Switch |
+|---------|---------------|----------------|
+| **DHCP Pools** | ✔ Configured | ✘ Skipped |
+| **SVIs with IP** | ✔ Configured | ✘ Skipped |
+| **VLANs** | ✔ Created | ✔ Created |
+| **Port Assignments** | ✔ Applied | ✔ Applied |
+| **Static Routes** | ✔ Applied | ✔ Applied* |
+
+\* *Static routes are sent to L2 switches but will fail silently if `ip routing` is not enabled. This is expected behavior.*
+
+Reference: `command_builder.py:108-127`
+
+<Note>
+Layer 2 switches still get VLANs, port assignments, and trunk configs. The gateway/DHCP is handled by an external router (R1) using router-on-a-stick.
+</Note>
+
+## Cleanup Strategy
+
+The `build_cleanup_commands()` function implements a **selective cleanup** strategy:
+
+### What Gets Removed
+
+<Tabs>
+  <Tab title="DHCP">
+    All DHCP pools and exclusions:
+    
+    ```python
+    for p in re.findall(r'^ip dhcp pool (\S+)', raw, re.MULTILINE):
+        cleanup.append(f"no ip dhcp pool {p}")
+    for e in re.findall(r'^ip dhcp excluded-address (.+)', raw, re.MULTILINE):
+        cleanup.append(f"no ip dhcp excluded-address {e.strip()}")
+    ```
+    
+    Reference: `command_builder.py:316-320`
+  </Tab>
+  
+  <Tab title="ACLs">
+    Only ACLs with the app's naming pattern (`SEGURIDAD_VLAN_*`):
+    
+    ```python
+    for a in re.findall(r'^ip access-list extended (SEGURIDAD_VLAN_\S+)', raw, re.MULTILINE):
+        cleanup.append(f"no ip access-list extended {a}")
+    ```
+    
+    **Pre-existing ACLs are preserved**.
+    
+    Reference: `command_builder.py:322-325`
+  </Tab>
+  
+  <Tab title="QoS">
+    All service-policies, policy-maps, and class-maps:
+    
+    ```python
+    # Remove service-policy from interfaces
+    for iface, body in re.findall(r'^interface (\S+)\n((?:[ \t].+\n)*)', raw, re.MULTILINE):
+        if 'service-policy' in body:
+            for d, pm in re.findall(r'service-policy (\S+) (\S+)', body):
+                cleanup += [f"interface {iface}", f"no service-policy {d} {pm}", "exit"]
+    
+    # Remove policy-maps and class-maps
+    for pm in re.findall(r'^policy-map (\S+)', raw, re.MULTILINE):
+        cleanup.append(f"no policy-map {pm}")
+    for cm in re.findall(r'^class-map \S+ (\S+)', raw, re.MULTILINE):
+        cleanup.append(f"no class-map {cm}")
+    ```
+    
+    Reference: `command_builder.py:327-337`
+  </Tab>
+  
+  <Tab title="SVIs">
+    Removes IP addresses and ACLs from SVIs, **except VLAN 1**:
+    
+    ```python
+    for iface, vid, body in re.findall(
+            r'^interface (Vlan(\d+))\n((?:[ \t].+\n)*)', raw, re.MULTILINE):
+        if vid == "1":
+            continue   # VLAN 1 es la VLAN de gestión, no se toca
+        if 'ip address' in body:
+            cleanup += [f"interface {iface}", "no ip address", "exit"]
+        if 'ip access-group' in body:
+            ag = re.search(r'ip access-group (\S+)', body)
+            if ag:
+                cleanup += [f"interface {iface}", f"no ip access-group {ag.group(1)} in", "exit"]
+    ```
+    
+    Reference: `command_builder.py:339-350`
+  </Tab>
+  
+  <Tab title="VLANs">
+    All VLANs **except VLAN 1**:
+    
+    ```python
+    vlan_raw = nc.send_command("show vlan brief", delay_factor=2)
+    for vid in re.findall(r'^(\d+)\s+\S+\s+active', vlan_raw, re.MULTILINE):
+        if vid != "1":
+            cleanup.append(f"no vlan {vid}")
+    ```
+    
+    Using `no vlan X` in IOS 15.x automatically removes the VLAN from all ports.
+    
+    Reference: `command_builder.py:366-371`
+  </Tab>
+  
+  <Tab title="Routes">
+    **Only routes the app configured** (from `static_routes` list):
+    
+    ```python
+    for rt in static_routes:
+        rt_str = f"{rt['dest']} {rt['mask']} {rt['nexthop']}"
+        if f"ip route {rt_str}" in raw:   # verificar que realmente existe
+            cleanup.append(f"no ip route {rt_str}")
+    ```
+    
+    Pre-existing routes (e.g., default route to R1) are **preserved**.
+    
+    Reference: `command_builder.py:373-379`
+  </Tab>
+  
+  <Tab title="OSPF">
+    **Only network statements the app added** (from `ospf_networks` list):
+    
+    ```python
+    pid_m = re.search(r'^router ospf (\d+)', raw, re.MULTILINE)
+    if pid_m and ospf_networks:
+        pid = pid_m.group(1)
+        for n in ospf_networks:
+            net_str = f"{n['network']} {n['wildcard']} area {n['area']}"
+            if net_str in raw:
+                cleanup += [f"router ospf {pid}", f"no network {net_str}", "exit"]
+    ```
+    
+    **The OSPF process itself is never removed** (`no router ospf X` is never sent).
+    
+    Pre-existing network statements (uplinks, loopbacks) are **preserved**.
+    
+    Reference: `command_builder.py:381-390`
+  </Tab>
+</Tabs>
+
+### What Gets Preserved
+
+<CardGroup cols={2}>
+  <Card title="Management Access" icon="lock">
+    - SSH crypto keys
+    - VTY lines
+    - User accounts
+    - Enable secret (old value)
+    - GigabitEthernet0/0 config
+  </Card>
+  
+  <Card title="Pre-existing Config" icon="shield">
+    - VLAN 1
+    - Static routes not added by app
+    - OSPF networks not added by app
+    - OSPF process config
+    - Custom ACLs (not SEGURIDAD_VLAN_*)
+  </Card>
+</CardGroup>
+
+Reference: `command_builder.py:289-392`
+
+## Enable Secret Timing
+
+The `enable secret` command (from Tab ⑧ Security) is applied **at the end** of the deployment:
+
+```python
+# ── 12. Seguridad: enable secret + login block-for + banner MOTD ─────────
+# Se aplican AL FINAL para no interferir con la sesión SSH activa que
+# está ejecutando estos comandos (el cambio de enable secret es inmediato
+# pero no cierra la sesión en curso).
+sec_cmds = build_security_commands(
+    enable_pw   = enable_pw,
+    attempts    = login_attempts,
+    window      = login_window,
+    block_for   = login_block_for,
+    banner_text = banner_text,
+)
+if sec_cmds:
+    if log_fn:
+        log_fn(f"  [Seguridad] {len(sec_cmds)} comandos de seguridad...")
+    cmds += sec_cmds
+```
+
+Reference: `command_builder.py:261-275`
+
+### Why This Matters
+
+**If applied first**:
+
+1. `enable secret newpassword123` runs
+2. Switch immediately requires `newpassword123` for enable mode
+3. Remaining commands fail because the app is using the old secret
+
+**By applying last**:
+
+1. All config commands run with the **current** enable secret
+2. `enable secret` changes at the end
+3. Next session will use the new secret
+4. Current SSH session remains active until `nc.disconnect()`
+
+Reference: README.md line 138
+
+## Verify Cleanup Before Production
+
+You can preview cleanup commands without executing them:
+
+1. Connect to a test switch
+2. Run cleanup with `do_clean=True`
+3. Check the log output for `[Limpieza]` commands
+4. Verify no critical commands like:
+   - `no line vty 0 15`
+   - `no crypto key`
+   - `no interface GigabitEthernet0/0`
+   - `no router ospf X` (entire process)
+
+Reference: `tab_exec_backup.py:162-203`
+
+## Related Functions
+
+- **`build_cleanup_commands()`** — Cleanup logic (`command_builder.py:289`)
+- **`detect_l3()`** — Layer 2/3 detection (`connector.py:50`)
+- **`run_on_switch()`** — Cleanup orchestration (`connector.py:166-183`)
