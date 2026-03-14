@@ -1,0 +1,96 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "SECURE-BRANCH-lac",
+  "projectDescription": "Python-based Infrastructure as Code (IaC) solution for automating, securing, and segmenting branch office networks using Cisco devices and GNS3 simulation",
+  "theme": "aspen",
+  "primaryColor": "#58a6ff",
+  "lightColor": "#3fb950",
+  "darkColor": "#f78166",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/project-structure",
+              "architecture/layer2-vs-layer3"
+            ]
+          },
+          {
+            "group": "Configuration Guides",
+            "pages": [
+              "guides/branches-dhcp",
+              "guides/vlans-ports",
+              "guides/routing",
+              "guides/qos",
+              "guides/security",
+              "guides/gre-ipsec"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/execution",
+              "operations/backup-s3",
+              "operations/safety-protections"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "api/command-builder",
+              "api/connector",
+              "api/constants"
+            ]
+          },
+          {
+            "group": "UI Components",
+            "pages": [
+              "api/app",
+              "api/widgets"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "GUI-based mass configuration of Cisco IOSvL2 switches for multiple branch offices",
+    "Automatic Layer 2/Layer 3 detection and adaptive configuration",
+    "VLAN segmentation with DHCP pools and security ACLs",
+    "QoS MQC (Modular Quality of Service) with class-map and policy-map",
+    "Device security hardening (enable secret, login block-for, banner MOTD)",
+    "GRE over IPsec tunnel configuration (IKEv1 + ESP-AES-256)",
+    "Automated backup to AWS S3 with SSE-AES256 encryption",
+    "OSPF dynamic routing and static route management",
+    "Safety protections for uplink interfaces and SSH access"
+  ],
+  "publicApiSurface": [
+    "SwitchConfiguratorV2 (main application class)",
+    "build_commands() - Generate IOS commands from configuration",
+    "build_cleanup_commands() - Safe cleanup of previous configurations",
+    "run_on_switch() - Connect and apply configuration to a switch",
+    "test_connection() - Test SSH connectivity and detect Layer 2/3",
+    "fetch_running_config() - Download running-config for backup",
+    "detect_l3() - Detect if switch has IP routing active",
+    "expand_ports() - Normalize interface notation (Gi0/1-3)",
+    "build_security_commands() - Generate security configuration commands",
+    "build_gre_ipsec_commands() - Generate GRE over IPsec tunnel commands"
+  ]
+}
